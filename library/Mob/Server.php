@@ -21,8 +21,7 @@ class Mob_Server {
 
   public static function getServers() {
     $servers = array(
-        "vendetta" => array("old" => "Old", "s1" => "s1 mods", "test" => "Test"),
-        "space4k" => array("s1" => "s1")
+        "vendetta" => array("old" => "Old", "s1" => "s1 mods", "test" => "Test")
     );
     
     if (self::getSubDomain() == "test") {
@@ -42,8 +41,7 @@ class Mob_Server {
   
   public static function getDeposito($number) {
     $depositos = array(
-                "vendetta" => array(1 => "almacenArm", 2 => "deposito", 3 => "caja", 4 => "almacenAlc"),
-                "space4k" => array(1 => "almacenHierro", 2 => "depositoLutino", 3 => "tanqueHidrogeno", 4 => "tanqueAgua")
+                "vendetta" => array(1 => "almacenArm", 2 => "deposito", 3 => "caja", 4 => "almacenAlc")
                 );
     return $depositos[self::getGameType()][$number];  
   }
@@ -54,64 +52,56 @@ class Mob_Server {
   
   public static function getNameHabRecurso($number) {
     $recursos = array(
-                "vendetta" => array(1 => "armeria", 2 => "municion", 3 => "taberna", 4 => "contrabando", 5 => "cerveceria"),
-                "space4k" => array(1 => "minaHierro", 2 => "refineriaLutino", 3 => "plQuimica", 4 => "plQuimicaMejorada", 5 => "plataformaPerforacion")
+                "vendetta" => array(1 => "armeria", 2 => "municion", 3 => "taberna", 4 => "contrabando", 5 => "cerveceria")
                 );
     return $recursos[self::getGameType()][$number];
   }  
   
   public static function getImgRecurso($number) {
     $recursos = array(
-                "vendetta" => array(1 => "arm.png", 2 => "mun.png", 3 => "dol.png", 4 => "alc.png"),
-                "space4k" => array(1 => "hierro.png", 2 => "lutino.png", 3 => "hidro.png", 4 => "agua.png")
+                "vendetta" => array(1 => "arm.png", 2 => "mun.png", 3 => "dol.png", 4 => "alc.png")
                 );
     return self::getStaticUrl()."img/".$recursos[self::getGameType()][$number];  
   }
   
   public static function getNameHabTiempo() {
     $habsTiempo = array(
-                "vendetta" => "oficina",
-                "space4k" => "centroOperaciones"
+                "vendetta" => "oficina"
                 );
     return $habsTiempo[self::getGameType()];    
   }
   
   public static function getNameHabAtaque() {
     $habsAtaque = array(
-                "vendetta" => "campo",
-                "space4k" => "hangar"
+                "vendetta" => "campo"
                 );
     return $habsAtaque[self::getGameType()];    
   }
   
   public static function getNameTrpOcupacion() {
     $trpOcupacion = array(
-                "vendetta" => "ocupacion",
-                "space4k" => "colonizador"
+                "vendetta" => "ocupacion"
                 );
     return $trpOcupacion[self::getGameType()];    
   }
   
 public static function getNameTrpEspia() {
     $trpOcupacion = array(
-                "vendetta" => "espia",
-                "space4k" => "sondaEspionaje"
+                "vendetta" => "espia"
                 );
     return $trpOcupacion[self::getGameType()];    
   }    
   
   public static function getNameHabDefensa() {
     $habsDefensa = array(
-                "vendetta" => "seguridad",
-                "space4k" => "estacionDefensa"
+                "vendetta" => "seguridad"
                 );
     return $habsDefensa[self::getGameType()];    
   }
   
   public static function getNameHabTiempoEnt() {
     $habsTiempo = array(
-                "vendetta" => "escuela",
-                "space4k" => "centroInvestigacion"
+                "vendetta" => "escuela"
                 );
     return $habsTiempo[self::getGameType()];  
   }
@@ -138,16 +128,14 @@ public static function getNameTrpEspia() {
   
   public static function getNameHabCapCarga() {
     $habsCarga = array(
-                "vendetta" => "contrabando",
-                "space4k" => "capCargaMejorada"
+                "vendetta" => "contrabando"
                 );
     return $habsCarga[self::getGameType()];  
   }
   
   public static function getNameEntPoderAtaque() {
     $entPoderAtaque = array(
-                "vendetta" => "honor",
-                "space4k" => "diplomacia"
+                "vendetta" => "honor"
                 );
     return $entPoderAtaque[self::getGameType()];  
   }

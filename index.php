@@ -27,8 +27,7 @@ if (getenv("GAME_SERVER_NAME") == "test") {
 
 require_once 'Mob/Server.php';
 
-$publicPath = Mob_Server::isGameServer() ? Mob_Server::getGameType()."_".Mob_Server::getSubDomain() : "public_html";
-if (getenv("GAME_SERVER_NAME") == "test") $publicPath = "vendetta_test";
+$publicPath = "public";
                             
 defined('PUBLIC_PATH')
     || define('PUBLIC_PATH',
