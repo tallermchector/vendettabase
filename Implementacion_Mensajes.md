@@ -1,173 +1,191 @@
-# Implementación: Sistema de Mensajería
+# Implementación Detallada: Sistema de Mensajería (Revisado)
 
-Este documento proporciona una guía técnica completa y autocontenida para desarrollar el **Sistema de Mensajería** interno del juego, que corresponde a la antigua `mensajes.php`.
+Este documento proporciona una guía técnica completa y autocontenida para desarrollar el **Sistema de Mensajería** interno del juego, utilizando una arquitectura de layouts anidados en el App Router.
 
 ---
 
 ### **1. Estructura de Rutas**
 
-Se utilizará un layout anidado para crear una experiencia de usuario similar a la de un cliente de correo.
-
--   **`app/messages/layout.tsx`**: El layout principal que contendrá la lista de mensajes (la barra lateral).
--   **`app/messages/page.tsx`**: La página por defecto que se muestra cuando no hay ningún mensaje seleccionado.
--   **`app/messages/[messageId]/page.tsx`**: La vista para leer un mensaje específico.
--   **`app/messages/new/page.tsx`**: La página con el formulario para componer un nuevo mensaje.
+-   **`src/app/messages/layout.tsx`**: Layout principal con la lista de mensajes.
+-   **`src/app/messages/page.tsx`**: Página por defecto, visible cuando no hay un mensaje seleccionado.
+-   **`src/app/messages/[messageId]/page.tsx`**: Vista para leer un mensaje.
+-   **`src/app/messages/new/page.tsx`**: Vista para componer un mensaje.
 
 ---
 
 ### **2. Objetivo de la Página**
 
-Crear un sistema de mensajería completo que permita al jugador:
-1.  Ver una lista de sus mensajes recibidos.
-2.  Leer el contenido de un mensaje específico.
-3.  Componer y enviar nuevos mensajes a otros jugadores.
-4.  Eliminar mensajes de su bandeja de entrada.
+Crear un sistema de mensajería que permita a los jugadores comunicarse de forma privada, incluyendo leer, escribir y gestionar sus mensajes.
 
 ---
 
-### **3. Obtención de Datos y Layouts**
+### **3. Tablas y Campos de Base de Datos Utilizados**
 
-El `layout.tsx` será un **Server Component** que obtendrá la lista de mensajes, actuando como la estructura principal de la sección.
+-   **`Message`**:
+    -   `id`: Identificador único.
+    -   `senderId`, `recipientId`: IDs para las relaciones con el remitente y destinatario.
+    -   `subject`, `body`: Contenido del mensaje.
+    -   `isRead`: Estado de lectura.
+    -   `deletedBySender`, `deletedByRecipient`: Banderas para borrado suave (soft delete).
+-   **`User`**:
+    -   `id`, `username`: Para identificar y mostrar los nombres de remitente/destinatario.
 
-**Lógica de `app/messages/layout.tsx`:**
+---
 
-```tsx
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import { prisma } from "@/lib/prisma";
-import { redirect } from "next/navigation";
-import { MessageList } from "@/components/messages/MessageList";
+### **4. Lógica de Obtención de Datos (Queries)**
 
-export default async function MessagesLayout({ children }: { children: React.ReactNode }) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    redirect("/login");
-  }
+La lógica de datos se encapsula en funciones de consulta específicas.
 
-  // 1. Obtener los resúmenes de los mensajes para la barra lateral
-  const messages = await prisma.message.findMany({
-    where: {
-      recipientId: session.user.id,
-      deletedByRecipient: false,
-    },
-    select: {
-      id: true,
-      subject: true,
-      isRead: true,
-      sentAt: true,
-      sender: { select: { username: true } },
-    },
+**`src/lib/features/messages/queries.ts`**:
+
+```typescript
+import { prisma } from "@/lib/core/prisma";
+import { cache } from 'react';
+
+// Obtiene la lista de resúmenes de mensajes para la barra lateral
+export const getMessageList = cache(async (userId: string) => {
+  return await prisma.message.findMany({
+    where: { recipientId: userId, deletedByRecipient: false },
+    select: { id: true, subject: true, isRead: true, sentAt: true, sender: { select: { username: true } } },
     orderBy: { sentAt: 'desc' },
   });
+});
+
+// Obtiene el contenido completo de un solo mensaje
+export const getMessageById = cache(async (messageId: string, userId: string) => {
+  return await prisma.message.findFirst({
+    where: { id: messageId, recipientId: userId }, // Seguridad: solo el destinatario puede leer
+    include: { sender: { select: { username: true } } },
+  });
+});
+```
+
+**`src/app/messages/layout.tsx`**:
+
+```tsx
+// ... (imports)
+import { getMessageList } from "@/lib/features/messages/queries";
+import { MessageList } from "@/components/features/messages/MessageList";
+
+export default async function MessagesLayout({ children }) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) redirect("/login");
+
+  const messages = await getMessageList(session.user.id);
 
   return (
-    <div className="container mx-auto grid grid-cols-1 md:grid-cols-4 gap-6">
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
       <aside className="md:col-span-1">
         <h2 className="text-2xl font-bold">Bandeja de Entrada</h2>
         <MessageList messages={messages} />
       </aside>
-      <main className="md:col-span-3">
-        {children} {/* Aquí se renderizará la página activa */}
-      </main>
+      <main className="md:col-span-3">{children}</main>
     </div>
   );
 }
 ```
 
-**Lógica de `app/messages/[messageId]/page.tsx`:**
-
-Este también es un **Server Component**, responsable de obtener y mostrar un mensaje completo.
+**`src/app/messages/[messageId]/page.tsx`**:
 
 ```tsx
 // ... (imports)
+import { getMessageById } from "@/lib/features/messages/queries";
+import { markMessageAsRead } from "@/lib/features/messages/actions";
+import { MessageView } from "@/components/features/messages/MessageView";
 
-export default async function MessageViewPage({ params }: { params: { messageId: string } }) {
+export default async function MessageViewPage({ params }) {
   const session = await getServerSession(authOptions);
-  const userId = session.user.id;
+  if (!session?.user?.id) redirect("/login");
 
-  // 1. Obtener el mensaje completo
-  const message = await prisma.message.findFirst({
-    where: {
-      id: params.messageId,
-      recipientId: userId, // ¡Importante! Asegurar que el usuario es el destinatario
-    },
-    include: { sender: { select: { username: true } } },
-  });
+  const message = await getMessageById(params.messageId, session.user.id);
+  if (!message) return <div>Mensaje no encontrado.</div>;
 
-  if (!message) {
-    return <div>Mensaje no encontrado o acceso denegado.</div>;
-  }
-
-  // 2. Marcar como leído (si no lo está ya)
+  // Marcar como leído si es necesario (la acción se encarga de la lógica)
   if (!message.isRead) {
-    await prisma.message.update({
-      where: { id: params.messageId },
-      data: { isRead: true },
-    });
-    revalidatePath('/messages'); // Revalida el layout para quitar el estado "no leído"
+    await markMessageAsRead(message.id);
   }
 
-  return <MessageDisplay message={message} />;
+  return <MessageView message={message} />;
 }
 ```
 
 ---
 
-### **4. Desglose de Componentes**
+### **5. Desglose de Componentes**
 
-#### **4.1. `MessageList` (Server Component)**
--   **Ruta:** `components/messages/MessageList.tsx`
--   **Propósito:** Renderiza la lista de resúmenes de mensajes.
--   **Lógica:** Itera sobre la lista de `messages` y renderiza un componente `MessageListItem` para cada uno.
+#### **`MessageList` (Client Component)**
+-   **Ruta:** `src/components/features/messages/MessageList.tsx`
+-   **Propósito:** Muestra la lista de mensajes y permite la navegación.
+-   **Lógica:** Es un **Client Component** para usar el hook `useParams` y el componente `<Link>`. Resalta el mensaje activo (`params.messageId`) y aplica estilos a los no leídos (`isRead: false`).
 
-#### **4.2. `MessageListItem` (Client Component)**
--   **Ruta:** `components/messages/MessageListItem.tsx`
--   **Propósito:** Un único elemento en la lista de mensajes, que es navegable.
--   **Props:** `{ message }`
--   **Lógica:**
-    -   Es un **Client Component** para poder usar el componente `<Link>` de Next.js.
-    -   Se envuelve en un `<Link href={`/messages/${message.id}`}>`.
-    -   Utiliza clases condicionales para mostrar un estilo diferente si `message.isRead` es `false` (ej. texto en negrita).
-
-#### **4.3. `MessageDisplay` (Server Component)**
--   **Ruta:** `components/messages/MessageDisplay.tsx`
--   **Propósito:** Muestra el contenido completo de un mensaje.
--   **Lógica:** Muestra el `subject`, `body`, `sender.username` y `sentAt`. Contiene los botones de acción como "Responder" y "Eliminar".
-
-#### **4.4. `DeleteMessageButton` (Client Component)**
--   **Ruta:** `components/messages/DeleteMessageButton.tsx`
--   **Propósito:** Botón para eliminar un mensaje.
--   **Props:** `{ messageId: string }`
--   **Lógica:**
-    -   Es un **Client Component** para manejar el evento `onClick`.
-    -   Llama a la `deleteMessageAction` y usa `useTransition` para mostrar un estado de carga.
-
-#### **4.5. `ComposeMessageForm` (Client Component)**
--   **Ruta:** `components/messages/ComposeMessageForm.tsx` (usado en `app/messages/new/page.tsx`)
--   **Propósito:** Formulario para escribir y enviar un nuevo mensaje.
--   **Lógica:**
-    -   Un formulario estándar con estado local (`useState`) para los campos `recipient`, `subject` y `body`.
-    -   El botón "Enviar" llama a la `sendMessageAction`.
+#### **`ComposeMessageForm` (Client Component)**
+-   **Ruta:** `src/components/features/messages/ComposeMessageForm.tsx`
+-   **Propósito:** Formulario para enviar mensajes.
+-   **Lógica:** Formulario con estado local para los campos. El botón "Enviar" llama a `sendMessageAction` con `useTransition`.
 
 ---
 
-### **5. Server Actions Relevantes**
+### **6. Lógica de Mutación de Datos (Server Actions)**
 
-#### **`sendMessageAction(formData)`**
--   **Ruta:** `app/actions/messageActions.ts`
--   **Lógica:**
-    1.  Declarar `"use server"`.
-    2.  Obtener la sesión del remitente.
-    3.  Extraer `recipientUsername`, `subject`, `body` del `formData`.
-    4.  **Validar:** Buscar el `recipient` en la base de datos por su `username`. Si no existe, devolver `{ error: "Destinatario no encontrado." }`.
-    5.  **Mutación:** Crear el nuevo registro en la tabla `Message`, asociando `senderId` y `recipientId`.
-    6.  **Redirección/Revalidación:** Una vez enviado, se debe redirigir al usuario (ej. a la bandeja de entrada) y revalidar la ruta para que la lista de mensajes del destinatario se actualice. `revalidatePath('/messages')` y luego `redirect('/messages')`.
+**`src/lib/features/messages/actions.ts`**:
 
-#### **`deleteMessageAction(messageId)`**
--   **Ruta:** `app/actions/messageActions.ts`
--   **Lógica:**
-    1.  Declarar `"use server"`.
-    2.  Obtener la sesión del usuario.
-    3.  **Seguridad:** Antes de actuar, leer el mensaje para confirmar que el `userId` de la sesión es el `recipientId` del mensaje.
-    4.  **Mutación:** En lugar de borrar el registro, se actualiza el campo `deletedByRecipient` a `true`. Esto asegura que el mensaje desaparezca de la bandeja de entrada del destinatario pero permanezca en el historial del remitente.
-    5.  **Redirección/Revalidación:** Llamar a `revalidatePath('/messages/layout')` para actualizar la lista de mensajes en la barra lateral, y luego `redirect('/messages')` para sacar al usuario de la vista del mensaje eliminado.
+```typescript
+"use server";
+import { prisma } from "@/lib/core/prisma";
+import { authOptions } from "@/lib/core/auth";
+import { getServerSession } from "next-auth/next";
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+
+export async function sendMessageAction(formData: FormData) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) return { error: "No autenticado" };
+
+  const recipientUsername = formData.get("recipient") as string;
+  // ... (obtener subject y body)
+
+  const recipient = await prisma.user.findUnique({ where: { username: recipientUsername } });
+  if (!recipient) return { error: "Destinatario no encontrado." };
+
+  await prisma.message.create({
+    data: {
+      senderId: session.user.id,
+      recipientId: recipient.id,
+      subject: formData.get("subject") as string,
+      body: formData.get("body") as string,
+    },
+  });
+
+  revalidatePath('/messages'); // Revalida la lista de mensajes del destinatario (y del remitente, si se implementa "Enviados")
+  redirect('/messages'); // Redirige al usuario a la bandeja de entrada
+}
+
+export async function deleteMessageAction(messageId: string) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) return { error: "No autenticado" };
+
+  // Actualiza la bandera de borrado en lugar de eliminar el registro (soft delete)
+  await prisma.message.update({
+    where: {
+      id: messageId,
+      recipientId: session.user.id, // Seguridad: solo el destinatario puede borrarlo de su vista
+    },
+    data: { deletedByRecipient: true },
+  });
+
+  revalidatePath('/messages');
+  redirect('/messages');
+}
+
+export async function markMessageAsRead(messageId: string) {
+    // Esta acción es llamada por el servidor, por lo que no necesita validación de sesión aquí,
+    // ya que la página que la llama ya lo hizo.
+    await prisma.message.update({
+        where: { id: messageId },
+        data: { isRead: true },
+    });
+    // Revalida la ruta para que el estado "no leído" se actualice en la UI
+    revalidatePath('/messages');
+}
+```
+Este enfoque con layouts anidados, queries específicas y Server Actions crea un sistema de mensajería robusto, seguro y eficiente.

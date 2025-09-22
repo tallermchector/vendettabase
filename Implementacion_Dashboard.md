@@ -1,4 +1,4 @@
-# Implementación: Dashboard (Visión General)
+# Implementación Detallada: Dashboard (Visión General) (Revisado)
 
 Este documento proporciona una guía técnica completa y autocontenida para desarrollar la página del **Dashboard**, que corresponde a la antigua `visiongeneral.php`. Esta es la página principal que los usuarios verán después de iniciar sesión.
 
@@ -6,208 +6,180 @@ Este documento proporciona una guía técnica completa y autocontenida para desa
 
 ### **1. Ruta del Archivo**
 
-`app/dashboard/page.tsx`
+`src/app/dashboard/page.tsx`
 
 ---
 
 ### **2. Objetivo de la Página**
 
-El Dashboard ofrece al jugador un resumen completo y de un solo vistazo de su imperio. Muestra información crítica como los planetas actuales, recursos, colas de construcción activas, movimientos de flotas y estadísticas generales. La página debe ser dinámica y reflejar las actualizaciones del juego en tiempo real o casi real.
+El Dashboard ofrece al jugador un resumen completo y de un solo vistazo de su imperio. Muestra información crítica como los planetas actuales, recursos, colas de construcción activas, movimientos de flotas y estadísticas generales. La página debe sentirse dinámica, con temporizadores y contadores que se actualizan en el cliente.
 
 ---
 
-### **3. Obtención de Datos (Data Fetching en el Servidor)**
+### **3. Tablas y Campos de Base de Datos Utilizados**
 
-La página `page.tsx` será un **Server Component** de React. Esto nos permite obtener todos los datos necesarios para la carga inicial directamente desde la base de datos en el servidor, antes de enviar la página al cliente. Esto resulta en una carga inicial muy rápida y eficiente.
+Para renderizar esta página, la consulta principal necesitará acceder a los siguientes modelos y campos de Prisma:
 
-**Lógica de `app/dashboard/page.tsx`:**
+-   **`User`**:
+    -   `id`: Para identificar al usuario.
+    -   `username`: Para mostrar en el encabezado.
+    -   `pointsTotal`, `rankPosition`: Para el componente de estadísticas.
+-   **`Building`** (asumiendo uno por usuario para simplificar):
+    -   `id`: Para identificar el planeta/edificio.
+    -   `coordX`, `coordY`, `coordZ`: Para mostrar la ubicación.
+    -   `armament`, `munition`, `alcohol`, `dollars`: Para la barra de recursos.
+-   **`NewConstruction`** (relacionado con `Building`):
+    -   `id`, `room`, `level`, `finishesAt`: Para la cola de construcción.
+-   **`NewTroop`** (relacionado con `Building`):
+    -   `id`, `troopName`, `quantity`, `finishesAt`: Para la cola de entrenamiento de tropas.
+-   **`ActiveResearch`** (relacionado con `User`):
+    -   `id`, `research`, `level`, `finishesAt`: Para la cola de investigación.
+-   **`Mission`** (relacionado con `User`):
+    -   `id`, `type`, `originX`, `destX`, `finishesAt`: Para la lista de movimientos de flotas.
+
+---
+
+### **4. Lógica de Obtención de Datos (Queries)**
+
+La página (`page.tsx`) será un **Server Component**. No usará `prisma` directamente. En su lugar, llamará a una función de consulta tipada y específica.
+
+**`src/lib/features/dashboard/queries.ts`**:
+
+```typescript
+import { prisma } from "@/lib/core/prisma";
+import { cache } from 'react';
+
+// cache() de React deduplica las peticiones a esta función durante una misma renderización.
+export const getDashboardData = cache(async (userId: string) => {
+  const userWithDashboardData = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      username: true,
+      pointsTotal: true,
+      rankPosition: true,
+      // Obtener el primer edificio como el "principal"
+      buildings: {
+        take: 1,
+        select: {
+          id: true,
+          coordX: true,
+          coordY: true,
+          coordZ: true,
+          armament: true,
+          munition: true,
+          alcohol: true,
+          dollars: true,
+          newConstructions: { select: { id: true, room: true, level: true, finishesAt: true } },
+          newTroops: { select: { id: true, troopName: true, quantity: true, finishesAt: true } },
+        },
+      },
+      activeResearch: { select: { id: true, research: true, level: true, finishesAt: true } },
+      missionsInitiated: { select: { id: true, type: true, originX: true, destX: true, finishesAt: true }, where: { /* misiones activas */ } },
+    }
+  });
+
+  return userWithDashboardData;
+});
+```
+
+**`src/app/dashboard/page.tsx`**:
 
 ```tsx
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import { prisma } from "@/lib/prisma";
+import { authOptions } from "@/lib/core/auth";
+import { getDashboardData } from "@/lib/features/dashboard/queries";
 import { redirect } from "next/navigation";
-
-// Importar los componentes que se describirán más adelante
-import { PlanetInfo } from "@/components/dashboard/PlanetInfo";
-import { ResourceBar } from "@/components/dashboard/ResourceBar";
-import { ActivityQueues } from "@/components/dashboard/ActivityQueues";
-import { FleetMovements } from "@/components/dashboard/FleetMovements";
-import { PlayerStats } from "@/components/dashboard/PlayerStats";
+import { DashboardView } from "@/components/features/dashboard/DashboardView";
 
 export default async function DashboardPage() {
-  // 1. Obtener la sesión del usuario
   const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    redirect("/login"); // Redirigir si no está autenticado
-  }
-  const userId = session.user.id;
+  if (!session?.user?.id) redirect("/login");
 
-  // 2. Obtener todos los datos del usuario en paralelo para máxima eficiencia
-  const [
-    user,
-    mainBuilding, // Suponemos que el usuario tiene un edificio/planeta principal
-    activeMissions,
-  ] = await Promise.all([
-    prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        username: true,
-        pointsTotal: true, // Asumiendo que hemos denormalizado los puntos para acceso rápido
-        rankPosition: true,
-      },
-    }),
-    prisma.building.findFirst({
-      where: { userId: userId },
-      include: {
-        newConstructions: true, // Cola de construcción
-        newTroops: true,        // Cola de tropas
-        activeResearch: true,   // Cola de investigación
-      },
-    }),
-    prisma.mission.findMany({
-      where: {
-        OR: [
-          { userId: userId }, // Flotas propias
-          // Aquí podría ir la lógica para flotas hostiles dirigiéndose al usuario
-        ],
-      },
-      orderBy: { finishesAt: 'asc' },
-    }),
-  ]);
-
-  if (!user || !mainBuilding) {
-    // Manejar el caso en que el usuario no tenga datos iniciales
-    return <div>Error: No se encontraron datos del jugador.</div>;
+  const data = await getDashboardData(session.user.id);
+  if (!data || data.buildings.length === 0) {
+    return <div>Bienvenido. Aún no tienes un planeta.</div>;
   }
 
-  // 3. Pasar los datos a los componentes hijos
-  return (
-    <div className="container mx-auto p-4 space-y-6">
-      <h1 className="text-3xl font-bold">Visión General de {user.username}</h1>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          <PlanetInfo building={mainBuilding} />
-          <ResourceBar initialResources={mainBuilding} />
-          <ActivityQueues
-            constructions={mainBuilding.newConstructions}
-            troops={mainBuilding.newTroops}
-            research={mainBuilding.activeResearch}
-          />
-        </div>
-        <div className="space-y-6">
-          <PlayerStats stats={user} />
-          <FleetMovements missions={activeMissions} />
-        </div>
-      </div>
-    </div>
-  );
+  return <DashboardView initialData={data} />;
 }
 ```
 
 ---
 
-### **4. Desglose de Componentes**
+### **5. Desglose de Componentes**
 
-#### **4.1. `PlanetInfo` (Server Component)**
--   **Ruta:** `components/dashboard/PlanetInfo.tsx`
--   **Propósito:** Muestra información estática del planeta principal del usuario.
--   **Props:** `{ building: Building }`
--   **Lógica:** Componente simple que recibe los datos del edificio y muestra su nombre, coordenadas y una imagen. Al ser un Server Component, no tiene estado ni interactividad.
-
-#### **4.2. `ResourceBar` (Client Component)**
--   **Ruta:** `components/dashboard/ResourceBar.tsx`
--   **Propósito:** Muestra los recursos actuales del jugador (armamento, munición, etc.) y los actualiza en tiempo real según la producción por segundo.
--   **Props:** `{ initialResources: { armament: number, munition: number, ... } }`
+#### **`DashboardView` (Client Component)**
+-   **Ruta:** `src/components/features/dashboard/DashboardView.tsx`
+-   **Propósito:** Es el componente principal del lado del cliente que recibe todos los datos iniciales y gestiona la interactividad.
+-   **Props:** `{ initialData }`
 -   **Lógica:**
-    -   Debe ser un **Client Component** (`"use client"`).
-    -   Utiliza el hook `useState` para inicializar el estado de los recursos con las `initialResources` recibidas del servidor.
-    -   Utiliza `useEffect` para iniciar un `setInterval` que se ejecuta cada segundo.
-    -   Dentro del intervalo, calcula la producción por segundo (este valor puede venir de una función de utilidad o de las props) y actualiza el estado de los recursos, provocando que la UI se vuelva a renderizar con los nuevos valores.
-    -   El `useEffect` debe retornar una función de limpieza que elimine el `setInterval` cuando el componente se desmonte para evitar fugas de memoria.
+    -   Marcado con `"use client"`.
+    -   Recibe `initialData` y lo pasa a sus componentes hijos.
+    -   Podría inicializar un store de Zustand aquí si fuera necesario para compartir estado entre los componentes hijos.
 
-```tsx
-"use client";
-import { useState, useEffect } from 'react';
+#### **`ResourceBar` (Client Component)**
+-   **Ruta:** `src/components/features/dashboard/ResourceBar.tsx`
+-   **Propósito:** Muestra los recursos y los actualiza visualmente.
+-   **Props:** `{ initialResources, productionRates }`
+-   **Lógica:**
+    -   Usa `useState` para inicializar los recursos con `initialResources`.
+    -   Usa `useEffect` con `setInterval` para añadir la producción por segundo a los recursos del estado. La limpieza del intervalo en el `return` del `useEffect` es crucial.
 
-// Supongamos que la producción por hora se pasa como prop o se calcula
-const PRODUCTION_RATES = { armament: 100, munition: 50 }; // Por hora
+#### **`ActivityQueues` (Client Component)**
+-   **Ruta:** `src/components/features/dashboard/ActivityQueues.tsx`
+-   **Propósito:** Muestra las colas de construcción, tropas e investigación.
+-   **Props:** `{ constructions, troops, research }`
+-   **Lógica:** Contiene tres listas, cada una mapeando sus datos a un `QueueItem` que incluye un `CountdownTimer` para mostrar el tiempo restante.
 
-export function ResourceBar({ initialResources }) {
-  const [resources, setResources] = useState(initialResources);
+#### **`CountdownTimer` (Client Component)**
+-   **Ruta:** `src/components/ui/CountdownTimer.tsx`
+-   **Propósito:** Componente reutilizable para mostrar una cuenta regresiva.
+-   **Props:** `{ finishesAt: Date }`
+-   **Lógica:** Calcula la diferencia entre `finishesAt` y la hora actual dentro de un `setInterval` en un `useEffect` y actualiza el estado local que muestra el tiempo restante (ej. "01:23:45").
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setResources(prev => ({
-        ...prev,
-        armament: prev.armament + PRODUCTION_RATES.armament / 3600,
-        munition: prev.munition + PRODUCTION_RATES.munition / 3600,
-      }));
-    }, 1000);
+---
 
-    return () => clearInterval(interval);
-  }, []);
+### **6. Lógica de Mutación de Datos (Server Actions)**
 
-  return (
-    <div>
-      <span>Armamento: {Math.floor(resources.armament)}</span>
-      <span>Munición: {Math.floor(resources.munition)}</span>
-      {/* ... otros recursos ... */}
-    </div>
-  );
+Las acciones como "cancelar" una construcción se definen en su propio módulo.
+
+**`src/lib/features/buildings/actions.ts`**:
+
+```typescript
+"use server";
+import { prisma } from "@/lib/core/prisma";
+import { authOptions } from "@/lib/core/auth";
+import { getServerSession } from "next-auth/next";
+import { revalidatePath } from "next/cache";
+
+export async function cancelConstructionAction(queueId: string) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) return { error: "No autenticado" };
+
+  try {
+    // La transacción asegura que la devolución de recursos y la cancelación ocurran juntas.
+    await prisma.$transaction(async (tx) => {
+      const constructionToCancel = await tx.newConstruction.findUnique({
+        where: { id: queueId, userId: session.user.id }, // ¡Validación de propiedad!
+      });
+
+      if (!constructionToCancel) throw new Error("Construcción no encontrada o no pertenece al usuario.");
+
+      // Lógica para calcular y devolver los recursos al usuario...
+      // await tx.building.update(...);
+
+      // Eliminar de la cola
+      await tx.newConstruction.delete({ where: { id: queueId } });
+    });
+  } catch (error) {
+    return { error: error.message };
+  }
+
+  // Revalidar las páginas afectadas para que la UI se actualice
+  revalidatePath('/dashboard');
+  revalidatePath('/buildings');
+
+  return { success: true };
 }
 ```
-
-#### **4.3. `ActivityQueues` (Client Component)**
--   **Ruta:** `components/dashboard/ActivityQueues.tsx`
--   **Propósito:** Muestra todas las colas activas (construcción, tropas, investigación) en un solo lugar.
--   **Props:** `{ constructions: NewConstruction[], troops: NewTroop[], research: ActiveResearch[] }`
--   **Lógica:**
-    -   Es un **Client Component** para poder manejar los temporizadores.
-    -   Recibe las listas de colas como props.
-    -   Renderiza cada lista en una sección separada.
-    -   Cada elemento de la lista (ej. `ConstructionQueueItem`) tendrá su propio temporizador de cuenta regresiva.
-    -   **Temporizador:** Un componente hijo (`<CountdownTimer />`) recibirá la `finishesAt` (fecha de finalización) y usará `useState` y `setInterval` para calcular y mostrar el tiempo restante. Cuando el tiempo llega a cero, podría mostrar "Completado" y opcionalmente invocar una acción para refrescar los datos.
-
-#### **4.4. `FleetMovements` (Client Component)**
--   **Ruta:** `components/dashboard/FleetMovements.tsx`
--   **Propósito:** Muestra las flotas en movimiento, tanto aliadas como enemigas.
--   **Props:** `{ missions: Mission[] }`
--   **Lógica:** Similar a `ActivityQueues`, es un **Client Component** que mapea sobre la lista de misiones y renderiza un componente `MissionItem` para cada una, el cual contendrá un `CountdownTimer` para mostrar el tiempo de llegada.
-
-#### **4.5. `PlayerStats` (Server Component)**
--   **Ruta:** `components/dashboard/PlayerStats.tsx`
--   **Propósito:** Muestra estadísticas clave del jugador.
--   **Props:** `{ stats: { pointsTotal: number, rankPosition: number } }`
--   **Lógica:** Componente simple de solo lectura que muestra los puntos y la posición en el ranking.
-
----
-
-### **5. Lógica del Lado del Cliente y Gestión de Estado**
-
--   **Estado Local:** El estado local (`useState`) es suficiente para los temporizadores de cuenta regresiva dentro de los componentes de las colas.
--   **Actualización de Recursos:** La barra de recursos maneja su propia lógica de "tick" de actualización. No se necesita una librería de estado global como Zustand para esta página si la lógica de recursos está contenida en `ResourceBar`.
-
----
-
-### **6. Server Actions Relevantes**
-
-Aunque la página es principalmente de visualización, las colas de actividad deberían tener un botón para **cancelar**. Esta acción es un candidato perfecto para una **Server Action**.
-
-**Acción: `cancelConstructionAction`**
--   **Ruta:** `app/actions/queueActions.ts`
--   **Parámetros:** `(queueId: string)`
--   **Lógica:**
-    1.  Marcar la función con `"use server"`.
-    2.  Obtener la sesión del servidor para verificar que el usuario está autenticado.
-    3.  Usar `prisma.newConstruction.delete()` para eliminar el elemento de la cola. Es crucial añadir una cláusula `where` para asegurar que el `queueId` pertenece al `userId` de la sesión, evitando que un usuario pueda cancelar la cola de otro.
-        ```prisma
-        await prisma.newConstruction.delete({
-          where: { id: queueId, userId: session.user.id }
-        });
-        ```
-    4.  Devolver los recursos al usuario si la cancelación lo requiere (dentro de una transacción de Prisma).
-    5.  Llamar a `revalidatePath('/dashboard')`. Esto le indica a Next.js que debe volver a obtener los datos de la página del dashboard y enviarlos actualizados al cliente, eliminando el elemento cancelado de la UI automáticamente.
-
-Este enfoque mantiene la lógica de mutación en el servidor y simplifica enormemente el código del cliente.
+Un botón en el componente `ActivityQueues` podría invocar esta acción, usando `useTransition` para un feedback inmediato.

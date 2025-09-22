@@ -1,209 +1,177 @@
-# Implementación: Gestión de Edificios
+# Implementación Detallada: Gestión de Edificios (Revisado)
 
-Este documento proporciona una guía técnica completa y autocontenida para desarrollar la página de **Gestión de Edificios**, que corresponde a la antigua `edificios.php`. Esta interfaz permite a los usuarios ver los niveles de sus edificios en un planeta, iniciar mejoras y ver la cola de construcción.
+Este documento proporciona una guía técnica completa y autocontenida para desarrollar la página de **Gestión de Edificios**, que corresponde a la antigua `edificios.php`.
 
 ---
 
 ### **1. Ruta del Archivo**
 
-`app/buildings/page.tsx`
-
-*(Nota: En una versión futura con múltiples planetas, esta podría ser una ruta dinámica como `app/buildings/[planetId]/page.tsx`. Por ahora, se asume que gestiona el planeta principal del usuario.)*
+`src/app/buildings/page.tsx`
 
 ---
 
 ### **2. Objetivo de la Página**
 
-El objetivo es proporcionar una interfaz clara donde el jugador pueda:
-1.  Ver una lista de todos los edificios disponibles en el juego.
-2.  Consultar el nivel actual de cada uno de sus edificios.
-3.  Ver los recursos necesarios para la próxima mejora.
-4.  Iniciar la mejora de un edificio si tiene los recursos suficientes.
-5.  Ver la cola de construcción actual.
+Proporcionar una interfaz clara donde el jugador pueda ver el estado de todos sus edificios, los recursos necesarios para mejorarlos, e iniciar dichas mejoras, que se añaden a una cola de construcción.
 
 ---
 
-### **3. Obtención de Datos y Lógica del Servidor**
+### **3. Tablas y Campos de Base de Datos Utilizados**
 
-La página `page.tsx` será un **Server Component**, obteniendo todos los datos necesarios en el servidor para una carga inicial rápida y segura.
+-   **`Building`**:
+    -   `id`: Para identificar el planeta/edificio que se está gestionando.
+    -   `userId`: Para asegurar la propiedad.
+    -   `armament`, `munition`, `alcohol`, `dollars`: Para comprobar si el jugador puede permitirse la mejora.
+-   **`Room`** (relacionado con `Building`):
+    -   Contiene los niveles actuales de cada edificio (ej. `oficina`, `armeria`, etc.).
+-   **`NewConstruction`** (relacionado con `Building`):
+    -   `id`, `room`, `level`, `finishesAt`: Para mostrar la cola de construcciones activas.
 
-**Lógica de `app/buildings/page.tsx`:**
+---
+
+### **4. Lógica de Obtención de Datos (Queries)**
+
+La página principal será un **Server Component** que obtiene los datos a través de una función de consulta específica.
+
+**`src/lib/features/buildings/queries.ts`**:
+
+```typescript
+import { prisma } from "@/lib/core/prisma";
+import { cache } from 'react';
+
+export const getBuildingsPageData = cache(async (userId: string) => {
+  const buildingData = await prisma.building.findFirst({
+    where: { userId }, // Asumiendo que se gestiona el planeta principal
+    select: {
+      id: true,
+      armament: true,
+      munition: true,
+      alcohol: true,
+      dollars: true,
+      rooms: true, // Objeto con los niveles de todos los edificios
+      newConstructions: {
+        select: { id: true, room: true, level: true, finishesAt: true },
+        orderBy: { finishesAt: 'asc' },
+      },
+    }
+  });
+
+  // Aquí también se obtendrían los datos estáticos del juego (costos, tiempos, etc.)
+  // const gameData = getGameRules('buildings');
+  // Se podrían pre-calcular los costos del siguiente nivel y pasarlos al cliente.
+
+  return buildingData;
+});
+```
+
+**`src/app/buildings/page.tsx`**:
 
 ```tsx
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import { prisma } from "@/lib/prisma";
+import { authOptions } from "@/lib/core/auth";
+import { getBuildingsPageData } from "@/lib/features/buildings/queries";
 import { redirect } from "next/navigation";
-
-// Importar componentes y datos estáticos del juego
-import { BuildingList } from "@/components/buildings/BuildingList";
-import { ConstructionQueue } from "@/components/buildings/ConstructionQueue";
-import { ResourceDisplay } from "@/components/shared/ResourceDisplay";
-import { getGameData } from "@/lib/gameData"; // Helper para obtener costos, tiempos, etc.
+import { BuildingsView } from "@/components/features/buildings/BuildingsView";
 
 export default async function BuildingsPage() {
-  // 1. Autenticación y obtención de datos del usuario
   const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    redirect("/login");
-  }
-  const userId = session.user.id;
+  if (!session?.user?.id) redirect("/login");
 
-  // 2. Obtener el planeta principal del usuario y sus datos asociados
-  const mainBuilding = await prisma.building.findFirst({
-    where: { userId },
-    include: {
-      rooms: true, // Niveles actuales de cada edificio
-      newConstructions: true, // Cola de construcción
-    },
-  });
+  const data = await getBuildingsPageData(session.user.id);
+  if (!data) return <div>Error: No se encontraron datos de edificios.</div>;
 
-  if (!mainBuilding || !mainBuilding.rooms) {
-    return <div>Error: No se encontró información del planeta.</div>;
-  }
-
-  // 3. Obtener los datos estáticos de los edificios (costos, nombres, descripciones)
-  const allBuildingsData = getGameData("buildings");
-
-  // 4. Pasar los datos a los componentes hijos
-  return (
-    <div className="container mx-auto p-4">
-      <h1 className="text-3xl font-bold mb-4">Edificios del Planeta</h1>
-
-      <ResourceDisplay resources={mainBuilding} />
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mt-6">
-        <div className="md:col-span-2">
-          <h2 className="text-2xl font-semibold mb-3">Mejorar Edificios</h2>
-          <BuildingList
-            currentLevels={mainBuilding.rooms}
-            allBuildingsData={allBuildingsData}
-            userResources={mainBuilding}
-            buildingId={mainBuilding.id}
-            activeConstructions={mainBuilding.newConstructions}
-          />
-        </div>
-        <div>
-          <h2 className="text-2xl font-semibold mb-3">Cola de Construcción</h2>
-          <ConstructionQueue constructions={mainBuilding.newConstructions} />
-        </div>
-      </div>
-    </div>
-  );
+  return <BuildingsView initialData={data} />;
 }
 ```
 
 ---
 
-### **4. Desglose de Componentes**
+### **5. Desglose de Componentes**
 
-#### **4.1. `BuildingList` (Server Component)**
--   **Ruta:** `components/buildings/BuildingList.tsx`
--   **Propósito:** Orquesta la renderización de la lista completa de edificios.
--   **Props:** `{ currentLevels, allBuildingsData, userResources, buildingId, activeConstructions }`
--   **Lógica:** Itera sobre `allBuildingsData`. Para cada edificio, extrae el nivel actual de `currentLevels` y calcula el costo y tiempo para la *siguiente* mejora. Luego, pasa toda esta información al componente `BuildingListItem`.
+#### **`BuildingsView` (Client Component)**
+-   **Ruta:** `src/components/features/buildings/BuildingsView.tsx`
+-   **Propósito:** Componente principal del lado del cliente que organiza la UI.
+-   **Props:** `{ initialData }`
+-   **Lógica:**
+    -   Marcado con `"use client"`.
+    -   Recibe `initialData` y lo desestructura para pasarlo a los componentes hijos (`BuildingList`, `ConstructionQueue`, `ResourceDisplay`).
+    -   Maneja el layout general de la página.
 
-#### **4.2. `BuildingListItem` (Client Component)**
--   **Ruta:** `components/buildings/BuildingListItem.tsx`
--   **Propósito:** Muestra la información de un solo edificio y contiene el botón para iniciar la mejora.
+#### **`BuildingListItem` (Client Component)**
+-   **Ruta:** `src/components/features/buildings/BuildingListItem.tsx`
+-   **Propósito:** Muestra un único edificio y el botón para mejorarlo.
 -   **Props:** `{ buildingData, currentLevel, nextLevelCost, userResources, buildingId, isUpgrading }`
 -   **Lógica:**
-    -   Es un **Client Component** (`"use client"`) porque contiene un botón con una acción (`onClick`).
-    -   Muestra el nombre, nivel actual, descripción y el costo de la siguiente mejora.
-    -   El botón "Mejorar" estará deshabilitado (`disabled`) si:
-        1.  `isUpgrading` es `true` (el edificio ya está en la cola).
-        2.  `userResources` no son suficientes para cubrir `nextLevelCost`. Esta comprobación en el cliente da feedback instantáneo al usuario.
-    -   Al hacer clic, invoca la `upgradeBuildingAction`.
+    -   Muestra nombre, nivel, descripción y costo de la mejora.
+    -   El botón "Mejorar" está deshabilitado si el edificio ya está en la cola (`isUpgrading`) o si el usuario no tiene suficientes recursos (`userResources < nextLevelCost`). Esta comprobación en el cliente da feedback instantáneo.
+    -   El `onClick` del botón invoca a la `upgradeBuildingAction`, usando `useTransition` para un estado de carga no bloqueante.
 
-```tsx
-"use client";
-import { useTransition } from 'react';
-import { upgradeBuildingAction } from '@/app/actions/buildingActions';
-
-export function BuildingListItem({ buildingData, currentLevel, nextLevelCost, userResources, buildingId, isUpgrading }) {
-  const [isPending, startTransition] = useTransition();
-
-  const canAfford = userResources.armament >= nextLevelCost.armament && userResources.munition >= nextLevelCost.munition;
-  const isDisabled = isUpgrading || !canAfford || isPending;
-
-  const handleUpgrade = () => {
-    startTransition(async () => {
-      const result = await upgradeBuildingAction(buildingId, buildingData.id);
-      if (result?.error) {
-        alert(`Error: ${result.error}`); // Reemplazar con un sistema de notificaciones
-      }
-    });
-  };
-
-  return (
-    <div className="border p-4 rounded-lg">
-      <h3 className="text-xl font-bold">{buildingData.name} (Nivel {currentLevel})</h3>
-      <p>Costo Mejora: {nextLevelCost.armament} Armamento, {nextLevelCost.munition} Munición</p>
-      <button onClick={handleUpgrade} disabled={isDisabled} className="...">
-        {isPending ? 'Mejorando...' : 'Mejorar'}
-      </button>
-    </div>
-  );
-}
-```
-
-#### **4.3. `ConstructionQueue` (Client Component)**
--   **Ruta:** `components/buildings/ConstructionQueue.tsx`
--   **Propósito:** Muestra la lista de construcciones en cola con temporizadores.
+#### **`ConstructionQueue` (Client Component)**
+-   **Ruta:** `src/components/features/buildings/ConstructionQueue.tsx`
+-   **Propósito:** Muestra la cola de construcción con temporizadores.
 -   **Props:** `{ constructions: NewConstruction[] }`
--   **Lógica:** Idéntica a la descrita en `Implementacion_Dashboard.md`. Es un componente reutilizable que recibe una lista y muestra cada ítem con una cuenta regresiva.
+-   **Lógica:** Reutiliza el componente de colas y temporizadores, mostrando una cuenta regresiva para cada elemento en construcción.
 
 ---
 
-### **5. Server Actions Relevantes**
+### **6. Lógica de Mutación de Datos (Server Actions)**
 
-La acción de mejora es el núcleo de la funcionalidad de esta página. Debe ser atómica y segura.
+La acción para mejorar un edificio debe ser atómica y segura.
 
-#### **Acción: `upgradeBuildingAction`**
--   **Ruta:** `app/actions/buildingActions.ts`
--   **Parámetros:** `(buildingId: string, roomType: string)` (ej. 'oficina', 'armeria')
--   **Lógica:**
-    1.  Declarar la función con `"use server"`.
-    2.  Obtener la sesión del usuario para validación.
-    3.  **Iniciar una transacción de base de datos** con `prisma.$transaction` para garantizar que todas las operaciones fallen o tengan éxito juntas.
-    4.  **Dentro de la transacción:**
-        a.  Obtener el `Building` y `Rooms` del usuario usando el `buildingId` y el `userId` de la sesión. Es crucial volver a leer los datos dentro de la transacción para evitar *race conditions*.
-        b.  Obtener los datos estáticos del `roomType` (fórmulas de costo y tiempo) desde `getGameData`.
-        c.  Calcular el costo para el nivel `currentLevel + 1`.
-        d.  **Validar:**
-            -   Comprobar si el usuario tiene suficientes recursos. Si no, `throw new Error("Recursos insuficientes.")`.
-            -   Comprobar si ya hay una construcción en la cola (`NewConstruction`). Si no, `throw new Error("La cola de construcción está llena.")`.
-        e.  **Ejecutar mutaciones:**
-            -   Restar los recursos del registro `Building`.
-            -   Crear una nueva entrada en la tabla `NewConstruction`, guardando el `roomType`, el `level` al que se mejorará y la fecha de finalización (`finishesAt`).
-    5.  Si la transacción tiene éxito, llamar a `revalidatePath('/buildings')` para que Next.js actualice la UI del cliente.
-    6.  Devolver un objeto con `success: true` o `{ error: "Mensaje de error" }` para que el frontend pueda reaccionar.
+**`src/lib/features/buildings/actions.ts`**:
 
 ```typescript
-// app/actions/buildingActions.ts
 "use server";
-
-// ... (imports de prisma, auth, revalidatePath, etc.)
+import { prisma } from "@/lib/core/prisma";
+import { authOptions } from "@/lib/core/auth";
+import { getServerSession } from "next-auth/next";
+import { revalidatePath } from "next/cache";
+// import { getBuildingUpgradeCost } from '@/lib/gameRules';
 
 export async function upgradeBuildingAction(buildingId: string, roomType: string) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return { error: "No autenticado" };
 
   try {
+    // La transacción asegura que todas las operaciones (restar recursos, añadir a la cola)
+    // se completen con éxito o fallen juntas, evitando inconsistencias.
     await prisma.$transaction(async (tx) => {
-      // Lógica de la transacción descrita arriba:
-      // 1. Leer datos frescos del usuario y edificio.
-      // 2. Calcular costos.
-      // 3. Validar recursos y cola.
-      // 4. Restar recursos y crear la nueva entrada en la cola.
+      // 1. Obtener los datos más recientes DENTRO de la transacción para evitar race conditions
+      const building = await tx.building.findUnique({
+        where: { id: buildingId, userId: session.user.id },
+        include: { rooms: true, newConstructions: true },
+      });
+
+      if (!building) throw new Error("Edificio no encontrado.");
+
+      // 2. Validar
+      // const currentLevel = building.rooms[roomType];
+      // const cost = getBuildingUpgradeCost(roomType, currentLevel + 1);
+      // if (building.armament < cost.armament) throw new Error("Recursos insuficientes.");
+      // if (building.newConstructions.length > 0) throw new Error("La cola está llena.");
+
+      // 3. Mutar los datos
+      // await tx.building.update({ where: { id: buildingId }, data: { armament: { decrement: cost.armament } } });
+
+      // await tx.newConstruction.create({
+      //   data: {
+      //     userId: session.user.id,
+      //     buildingId: buildingId,
+      //     room: roomType,
+      //     level: currentLevel + 1,
+      //     // finishesAt: ... calcular tiempo ...
+      //   },
+      // });
     });
   } catch (error) {
     return { error: error.message };
   }
 
+  // 4. Revalidar la caché para que la UI se actualice
   revalidatePath('/buildings');
-  revalidatePath('/dashboard'); // También revalidar el dashboard
+  revalidatePath('/dashboard');
+
   return { success: true };
 }
 ```
-Este diseño asegura que toda la lógica de negocio crítica resida en el servidor, manteniendo el cliente ligero y enfocado en la presentación.
+Este diseño coloca toda la lógica de negocio y las validaciones críticas en el servidor, haciendo el frontend más simple y seguro.

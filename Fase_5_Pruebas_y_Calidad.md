@@ -1,52 +1,72 @@
-# Fase 5: Estrategia de Pruebas y Calidad del Código
+# Fase 5: Estrategia de Pruebas y Calidad del Código (Revisado)
 
-Una aplicación robusta requiere una estrategia de pruebas sólida. Este documento define un enfoque de múltiples capas para garantizar la calidad, estabilidad y fiabilidad de la nueva plataforma "Vendetta-Legacy".
+Una aplicación robusta requiere una estrategia de pruebas sólida. Este documento define un enfoque de múltiples capas para garantizar la calidad, estabilidad y fiabilidad de la nueva plataforma "Vendetta-Legacy", adaptado a la estructura de directorios `src/`.
 
 ## 1. Pruebas Unitarias
 
 Las pruebas unitarias se centran en verificar la unidad de código más pequeña posible (una función, un componente) de forma aislada.
 
-### 1.1. Backend (Lógica de Negocio)
+### 1.1. Lógica de Negocio y Server Actions
 
 -   **Herramienta:** **Vitest**. Es un framework de pruebas moderno, rápido y compatible con TypeScript.
--   **Enfoque:** Probaremos funciones puras que encapsulan la lógica de negocio crítica. Por ejemplo, los cálculos de producción de recursos, los algoritmos de combate, o las funciones de validación.
--   **Mocking de Base de Datos:** Para evitar que las pruebas unitarias dependan de una base de datos real, usaremos la librería **`prisma-mock`**. Nos permite simular el cliente de Prisma y definir los datos que devolverá para cada consulta, garantizando pruebas predecibles y rápidas.
+-   **Enfoque:**
+    1.  **Funciones Puras:** Se probarán funciones de cálculo y lógica de negocio pura (ej. `runCombatSimulation`) de forma aislada.
+    2.  **Server Actions:** Se pueden probar unitariamente importándolas directamente en el archivo de prueba. La capa de base de datos se mockeará con **`prisma-mock`** para simular las respuestas de Prisma y verificar que la acción se comporta como se espera bajo diferentes condiciones.
 
-**Ejemplo (Prueba de una función de cálculo):**
+**Ejemplo (Prueba de una Server Action):**
 ```typescript
-// lib/calculations.test.ts
-import { describe, it, expect } from 'vitest';
-import { calculateResourceProduction } from './calculations';
+// src/lib/features/buildings/actions.test.ts
+import { describe, it, expect, vi } from 'vitest';
+import { upgradeBuildingAction } from './actions';
+import { prisma } from '@/lib/core/prisma'; // Prisma se mockeará
 
-describe('calculateResourceProduction', () => {
-  it('should calculate production correctly for level 5 brewery', () => {
-    const level = 5;
-    const production = calculateResourceProduction('brewery', level);
-    expect(production).toBe(150); // Ejemplo de valor esperado
+// Mockear el módulo de Prisma
+vi.mock('@/lib/core/prisma', () => ({
+  prisma: {
+    // Mock de las funciones de prisma que usa la acción
+    building: { findUnique: vi.fn(), update: vi.fn() },
+    newConstruction: { create: vi.fn() },
+    $transaction: vi.fn(async (callback) => callback(prisma)),
+  },
+}));
+
+// Mockear Next-Auth
+vi.mock('next-auth/next');
+
+describe('upgradeBuildingAction', () => {
+  it('should throw an error if user is not authenticated', async () => {
+    // Setup: simular que no hay sesión
+    // ...
+    await expect(upgradeBuildingAction('b1', 'oficina')).rejects.toThrow('No autenticado');
+  });
+
+  it('should successfully create a construction job', async () => {
+    // Setup: simular una sesión válida y las respuestas de prisma
+    // ...
+    const result = await upgradeBuildingAction('b1', 'oficina');
+    expect(result).toEqual({ success: true });
+    expect(prisma.newConstruction.create).toHaveBeenCalledOnce();
   });
 });
 ```
 
-### 1.2. Frontend (Componentes de React)
+### 1.2. Componentes de React
 
 -   **Herramientas:** **Vitest** y **React Testing Library (RTL)**.
--   **Enfoque:** RTL nos anima a probar los componentes de la misma manera que un usuario los utilizaría. En lugar de probar la implementación interna, probamos el resultado renderizado y la interacción. Se verificará que los componentes se rendericen correctamente según las props recibidas y que respondan a los eventos del usuario.
+-   **Enfoque:** Se probará que los componentes se rendericen correctamente y respondan a eventos del usuario. Las pruebas se ubicarán junto a los componentes que prueban.
 
-**Ejemplo (Prueba de un componente de botón):**
+**Ejemplo (Prueba de un componente de UI):**
 ```tsx
-// components/ui/Button.test.tsx
+// src/components/ui/Button.test.tsx
 import { render, screen, fireEvent } from '@testing-library/react';
 import { Button } from './Button';
 import { describe, it, expect, vi } from 'vitest';
 
 describe('Button', () => {
   it('should render and be clickable', () => {
-    const handleClick = vi.fn(); // Mock de la función onClick
+    const handleClick = vi.fn();
     render(<Button onClick={handleClick}>Click Me</Button>);
-
     const buttonElement = screen.getByText(/Click Me/i);
-    expect(buttonElement).toBeInTheDocument();
-
     fireEvent.click(buttonElement);
     expect(handleClick).toHaveBeenCalledTimes(1);
   });
@@ -55,68 +75,58 @@ describe('Button', () => {
 
 ## 2. Pruebas de Integración
 
-Estas pruebas verifican la interacción entre varias partes del sistema, especialmente entre el frontend y el backend (API Routes).
+Dado que la nueva arquitectura prioriza Server Actions sobre API Routes, el enfoque de las pruebas de integración cambia. En lugar de mockear `fetch` con MSW para las mutaciones, probaremos la integración entre los **Client Components** y las **Server Actions** que invocan. Las pruebas unitarias de las Server Actions (vistas arriba) ya cubren gran parte de esta integración.
 
--   **Herramienta:** **Mock Service Worker (MSW)**.
--   **Enfoque:** MSW intercepta las peticiones de red (`fetch`) que realizan nuestros componentes de React durante las pruebas. En lugar de llamar a la API real, MSW devuelve una respuesta simulada que nosotros definimos. Esto nos permite probar flujos completos del lado del cliente (ej. un usuario llena un formulario y hace clic en "Enviar") sin depender de un servidor de backend en ejecución.
-
-**Ejemplo (Probar un formulario que llama a una API):**
-Podemos simular que la API devuelve un `200 OK` en un caso de prueba y un `400 Bad Request` en otro, y verificar que nuestro componente de React maneja ambos escenarios correctamente (mostrando un mensaje de éxito o de error).
+Para las pocas API Routes que queden (ej. crons, webhooks), el uso de `MSW` seguiría siendo válido si se necesitara probar un componente cliente que las consuma.
 
 ## 3. Pruebas End-to-End (E2E)
 
-Las pruebas E2E son la capa más alta de la pirámide de testing. Simulan un flujo de usuario completo en un entorno lo más parecido posible al de producción.
+Este nivel de pruebas no cambia significativamente. Sigue siendo crucial para verificar los flujos de usuario completos en un entorno real.
 
--   **Herramientas:** **Playwright** (recomendado) o **Cypress**. Playwright ofrece una excelente automatización del navegador y es desarrollado por Microsoft.
--   **Enfoque:** Escribiremos scripts que automaticen el navegador para realizar acciones como si fueran un usuario real.
-
-### 3.1. Flujos de Prueba Críticos
-
-Se deben implementar al menos los siguientes flujos de E2E:
-
-1.  **Registro y Primera Construcción:**
-    -   Navegar a la página de registro.
-    -   Crear una nueva cuenta.
-    -   Iniciar sesión.
-    -   Navegar a la página de edificios.
-    -   Hacer clic en "Construir" en el primer edificio.
-    -   Verificar que el edificio aparezca en la cola de construcción.
-
-2.  **Ciclo de Ataque y Verificación de Informe:**
-    -   Iniciar sesión con el "Jugador A".
-    -   Enviar un ataque al "Jugador B".
-    -   Cerrar sesión.
-    -   Iniciar sesión con el "Jugador B".
-    -   Navegar a la sección de informes de batalla.
-    -   Verificar que un nuevo informe del ataque del "Jugador A" esté presente.
-
-3.  **Unirse a una Familia (Alianza):**
-    -   Iniciar sesión con un jugador sin familia.
-    -   Navegar a la lista de familias.
-    -   Enviar una solicitud para unirse a una familia.
-    -   Iniciar sesión con el líder de la familia.
-    -   Aceptar la solicitud del jugador.
-    -   Verificar que el jugador ahora es miembro de la familia.
+-   **Herramientas:** **Playwright** (recomendado) o **Cypress**.
+-   **Enfoque:** Los scripts de prueba simularán flujos de usuario completos en un navegador. Los flujos críticos a probar siguen siendo los mismos:
+    1.  Registro y primera construcción.
+    2.  Ciclo de ataque y verificación del informe de batalla.
+    3.  Unirse a una familia (alianza).
 
 ## 4. Integración Continua (CI/CD)
 
-La automatización es clave para mantener la calidad a lo largo del tiempo.
+El pipeline de CI/CD con **GitHub Actions** se mantiene, asegurando que todos los chequeos de calidad se ejecuten automáticamente.
 
--   **Herramienta:** **GitHub Actions**.
--   **Enfoque:** Crearemos un "workflow" de CI que se ejecutará en cada `push` a una rama o en cada `pull request`.
+**Archivo: `.github/workflows/ci.yml`**
+```yaml
+name: CI Pipeline
 
-### 4.1. Pipeline Básico de CI
+on: [push, pull_request]
 
-El pipeline (`.github/workflows/ci.yml`) realizará los siguientes pasos:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
 
-1.  **Checkout:** Descargar el código del repositorio.
-2.  **Setup Environment:** Instalar Node.js y las dependencias del proyecto (`npm install`).
-3.  **Linting:** Ejecutar ESLint para verificar la calidad y el estilo del código (`npm run lint`). El pipeline fallará si hay errores.
-4.  **Unit & Integration Tests:** Ejecutar todas las pruebas de Vitest (`npm test`). El pipeline fallará si alguna prueba no pasa.
-5.  **E2E Tests:**
-    -   Iniciar la aplicación de Next.js en modo de producción.
-    -   Ejecutar las pruebas de Playwright/Cypress contra la aplicación en ejecución.
-    -   Este paso a menudo requiere una base de datos de prueba separada.
-6.  **Build:** Ejecutar el comando de build de Next.js (`npm run build`) para asegurarse de que el proyecto compila correctamente para producción.
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
 
-Este pipeline garantiza que cualquier cambio propuesto sea verificado automáticamente, reduciendo drásticamente la posibilidad de introducir regresiones en la rama principal.
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Run Linting
+        run: npm run lint
+
+      - name: Run Unit & Integration Tests
+        run: npm test
+
+      # El build se ejecuta después de que los tests pasen
+      - name: Run Build
+        run: npm run build
+
+      # Las pruebas E2E son opcionales en CI para mayor rapidez,
+      # pero recomendadas antes de un despliegue a producción.
+      # - name: Run E2E Tests
+      #   run: npm run test:e2e
+```
+Este pipeline garantiza una alta calidad del código y previene la introducción de regresiones en la base del código.
