@@ -1,133 +1,142 @@
-# Fase 2: Entorno del Proyecto y Estrategia de Datos
+# Fase 2: Entorno del Proyecto y Estrategia de Datos (Revisado)
 
-Este documento detalla la configuración inicial del proyecto "Vendetta-Legacy" reconstruido sobre Next.js y la estrategia para la migración de la base de datos desde MySQL a PostgreSQL utilizando Prisma.
+Este documento detalla la configuración inicial del proyecto "Vendetta-Legacy" reconstruido sobre Next.js, incorporando una estructura de directorios basada en `src/` y una estrategia clara para la migración de la base de datos desde MySQL a PostgreSQL utilizando Prisma.
 
 ## 1. Sección Frontend y Backend (Next.js)
 
-La base de nuestra nueva arquitectura es un proyecto Next.js autocontenido que manejará tanto el frontend como el backend (API).
+La base de nuestra nueva arquitectura es un proyecto Next.js autocontenido que manejará tanto el frontend como el backend (API), manteniendo el código fuente principal organizado dentro de un directorio `src`.
 
 ### 1.1. Inicialización del Proyecto
 
-Para comenzar, utilizaremos `create-next-app`, la herramienta oficial para arrancar proyectos Next.js. Esto nos proporcionará una base sólida con las mejores prácticas de la industria.
+Para comenzar, utilizaremos `create-next-app`, la herramienta oficial para arrancar proyectos Next.js. Esto nos proporcionará una base sólida con las mejores prácticas de la industria, configurada para usar el directorio `src`.
 
 Ejecuta el siguiente comando en tu terminal:
 
 ```bash
-npx create-next-app@latest vendetta-next --typescript --tailwind --eslint
+npx create-next-app@latest vendetta-next --typescript --tailwind --eslint --src-dir --app
 ```
 
-Opciones seleccionadas:
+Opciones seleccionadas y su propósito:
 - **`--typescript`**: Esencial para un desarrollo robusto y tipado de extremo a extremo. La seguridad de tipos es un pilar de esta migración.
 - **`--tailwind`**: Integraremos Tailwind CSS para un estilizado rápido y mantenible, permitiéndonos crear interfaces de usuario modernas y consistentes.
 - **`--eslint`**: Configuraremos ESLint para mantener la calidad y consistencia del código desde el primer día.
+- **`--src-dir`**: Esta opción instruye al instalador para que coloque todo el código fuente de la aplicación (páginas, componentes, etc.) dentro de un directorio `src/`, una práctica común para separar el código de la aplicación de los archivos de configuración del proyecto.
+- **`--app`**: Asegura explícitamente el uso del **App Router**, que es fundamental para esta arquitectura basada en Server Components y Server Actions.
 
-Se recomienda seleccionar **App Router** durante el proceso de instalación para aprovechar las últimas características de Next.js, como los Server Components y las Server Actions.
+### 1.2. Estructura de Carpetas (con Directorio `src`)
 
-### 1.2. Estructura de Carpetas
-
-Proponemos una estructura de carpetas que promueve la organización y escalabilidad del proyecto:
+La estructura de carpetas propuesta promueve una clara separación entre el código fuente de la aplicación y los archivos de configuración. La modularidad por funcionalidad (`feature`) se introduce en el directorio `lib` para una mejor organización de la lógica de negocio.
 
 ```
 vendetta-next/
-├── app/                  # App Router: Rutas, páginas y layouts
-│   ├── api/              # Rutas de la API (Backend)
-│   │   └── auth/
-│   │       └── [...nextauth]/
-│   │           └── route.ts # Endpoint de Next-Auth
-│   ├── dashboard/        # Ejemplo de ruta protegida
-│   │   └── page.tsx
-│   └── layout.tsx        # Layout principal
-├── components/           # Componentes de React reutilizables
-│   ├── ui/               # Componentes de UI genéricos (botones, inputs)
-│   └── game/             # Componentes específicos del juego (mapa, edificios)
-├── lib/                  # Funciones de utilidad y helpers
-│   ├── prisma.ts         # Instancia global del cliente de Prisma
-│   └── utils.ts          # Funciones de ayuda generales
-├── prisma/               # Archivos relacionados con Prisma
-│   ├── schema.prisma     # El esquema de tu base de datos
-│   └── migrations/       # Migraciones generadas por Prisma
-├── public/               # Archivos estáticos (imágenes, fuentes)
-├── .env.local            # Variables de entorno (¡No subir a Git!)
+├── prisma/                 # Directorio de Prisma (fuera de src)
+│   ├── schema.prisma       # El esquema de tu base de datos
+│   └── migrations/         # Migraciones generadas por Prisma
+├── public/                 # Archivos estáticos (imágenes, fuentes)
+├── src/                    # Directorio principal del código fuente
+│   ├── app/                # App Router: Rutas, páginas y layouts
+│   │   ├── api/            # Rutas de la API (Backend)
+│   │   │   └── auth/
+│   │   │       └── [...nextauth]/
+│   │   │           └── route.ts
+│   │   ├── dashboard/      # Página de Visión General
+│   │   │   └── page.tsx
+│   │   └── layout.tsx      # Layout principal
+│   ├── components/         # Componentes de React reutilizables
+│   │   ├── ui/             # Componentes de UI genéricos (Button, Input)
+│   │   └── features/       # Componentes específicos de una funcionalidad
+│   │       ├── dashboard/
+│   │       └── buildings/
+│   └── lib/                # Lógica de negocio, helpers y acceso a datos
+│       ├── core/           # Instancias clave (Prisma, etc.)
+│       │   └── prisma.ts
+│       ├── features/       # Lógica de negocio modular
+│       │   ├── dashboard/
+│       │   │   ├── actions.ts  # Server Actions para el dashboard
+│       │   │   └── queries.ts  # Funciones de acceso a datos para el dashboard
+│       │   └── buildings/
+│       │       ├── actions.ts
+│       │       └── queries.ts
+│       └── types/            # Definiciones de tipos y Zod schemas
+├── .env.local              # Variables de entorno (¡No subir a Git!)
 └── package.json
 ```
 
 ### 1.3. Configuración de Entorno
 
-La seguridad de las credenciales es primordial. Crearemos un archivo `.env.local` en la raíz del proyecto para almacenar la cadena de conexión de nuestra base de datos PostgreSQL. Este archivo es ignorado por Git por defecto, evitando que las claves secretas se filtren.
+La seguridad de las credenciales es primordial. Crearemos un archivo `.env.local` en la raíz del proyecto para almacenar la cadena de conexión de nuestra base de datos PostgreSQL. Este archivo es ignorado por Git por defecto.
 
 **Contenido de `.env.local`:**
 
 ```env
-# Ejemplo de URL de conexión a PostgreSQL
+# URL de conexión a PostgreSQL
 # Formato: postgresql://[USER]:[PASSWORD]@[HOST]:[PORT]/[DATABASE_NAME]
 DATABASE_URL="postgresql://user:password@localhost:5432/vendetta_db"
-```
 
-Esta variable será utilizada por Prisma para conectarse a la base de datos.
+# Clave secreta para Next-Auth
+NEXTAUTH_SECRET="UNA_CLAVE_SECRETA_MUY_LARGA_Y_ALEATORIA"
+```
 
 ## 2. Sección de Base de Datos (Prisma y PostgreSQL)
 
-Modernizaremos la persistencia de datos migrando de MySQL a PostgreSQL y utilizando Prisma como nuestro ORM.
+### 2.1. Inicialización y Ubicación de Prisma
 
-### 2.1. Inicialización de Prisma
-
-Dentro del proyecto Next.js, inicializamos Prisma con el siguiente comando:
+Dentro del proyecto Next.js, inicializamos Prisma:
 
 ```bash
 npx prisma init
 ```
 
-Este comando realiza dos acciones clave:
-1.  Crea el directorio `prisma/` con un archivo `schema.prisma` básico.
-2.  Crea el archivo `.env` (si no existe) y añade la variable `DATABASE_URL`.
+Esto crea el directorio `prisma/` en la **raíz del proyecto**. Es la ubicación estándar y recomendada, ya que el esquema de la base de datos es una dependencia de desarrollo que afecta a toda la aplicación, no una parte del código fuente de `src`.
 
-Ahora, debemos editar `prisma/schema.prisma` para configurar PostgreSQL como nuestro proveedor de datos:
+Edita `prisma/schema.prisma` para configurar PostgreSQL:
 
 ```prisma
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "postgresql" // Cambiado de "mysql" a "postgresql"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 ```
 
-### 2.2. Migración de Esquema (Análisis)
+### 2.2. Migración de Esquema (Análisis Detallado)
 
-El siguiente paso es traducir el esquema de `mob_db.sql` a la sintaxis declarativa de Prisma. Este proceso no es una simple copia; es una oportunidad para modernizar y mejorar la estructura de la base de datos.
+Traducir `mob_db.sql` a `prisma/schema.prisma` es una oportunidad para modernizar la base de datos.
 
-**Modernizaciones Clave:**
--   **Claves Primarias:** Reemplazaremos los `INT AUTO_INCREMENT` por `String @id @default(cuid())`. Los CUIDs son identificadores únicos, cortos y amigables para URLs, ideales para evitar la enumeración de recursos.
--   **Marcas de Tiempo:** Utilizaremos `DateTime @default(now())` para las fechas de creación y `DateTime @updatedAt` para las fechas de última actualización. Prisma gestionará estos campos automáticamente.
--   **Relaciones Explícitas:** Definiremos las relaciones entre modelos usando `@relation`. Esto proporciona seguridad de tipos en las consultas anidadas y garantiza la integridad referencial a nivel de base de datos con claves foráneas.
--   **Nombres de Modelos y Campos:** Adoptaremos la convención `PascalCase` para nombres de modelos y `camelCase` para nombres de campos, mejorando la legibilidad.
--   **Tipos de Datos Modernos:** Campos que almacenan estructuras complejas o listas (como `tropas` en `mob_misiones`) pueden ser refactorizados al tipo `Json` si es apropiado, simplificando el modelo.
+**Modernizaciones Clave y su Razón de Ser:**
+-   **Claves Primarias `String @id @default(cuid())`**: A diferencia de los `INT AUTO_INCREMENT`, los CUIDs son identificadores únicos no secuenciales. Esto previene que actores maliciosos puedan enumerar recursos fácilmente (ej. `GET /users/1`, `GET /users/2`, etc.) y son más robustos en sistemas distribuidos.
+-   **Marcas de Tiempo Automáticas**: `createdAt DateTime @default(now())` y `updatedAt DateTime @updatedAt`. Dejar que Prisma y la base de datos gestionen estos campos reduce la lógica manual en el código y asegura la consistencia.
+-   **Relaciones Explícitas (`@relation`)**: Definir relaciones con `User @relation(fields: [userId], references: [id])` crea restricciones de clave foránea a nivel de base de datos. Esto garantiza la integridad referencial (no puedes tener un edificio sin un usuario válido) y habilita el potente API de Prisma para consultas anidadas (`include` y `select`).
+-   **Nombres de Modelos y Campos**: `PascalCase` para modelos (tablas) y `camelCase` para campos (columnas) es la convención estándar en el ecosistema JavaScript/TypeScript. Esto hace que el código sea más predecible y fácil de leer.
+-   **Tipos `enum`**: Para campos que solo pueden contener un conjunto fijo de valores (como `MissionType`), usar un `enum` en Prisma (`enum MissionType { ATTACK, TRANSPORT }`) proporciona seguridad de tipos en todo el código, previniendo errores por valores inválidos.
 
 ### 2.3. Estrategia de Migración de Datos (ETL)
 
-Para mover los datos existentes desde la base de datos MySQL legacy a nuestra nueva base de datos PostgreSQL, seguiremos un proceso de **Extract, Transform, Load (ETL)**.
+El proceso de **Extract, Transform, Load (ETL)** es crítico para mover los datos existentes de MySQL a PostgreSQL sin pérdida de información.
 
-**Plan de Acción:**
+**Plan de Acción Detallado:**
 
 1.  **Extract (Extraer):**
-    -   Exportaremos cada tabla de la base de datos MySQL (`vendetta_plus_old`) a un archivo CSV separado (ej. `usuarios.csv`, `edificios.csv`, etc.). Se pueden usar herramientas como `mysqldump` o DBeaver.
+    -   Desde la base de datos MySQL `vendetta_plus_old`, exportar cada tabla a un archivo CSV. **Es crucial exportar con encabezados de columna.**
+    -   Herramienta recomendada: `DBeaver` o `TablePlus` permiten exportar resultados de `SELECT * FROM nombre_tabla` a CSV de forma sencilla.
 
-2.  **Transform (Transformar):**
-    -   Este es el paso más crítico. Escribiremos un script de Node.js/TypeScript que realizará las siguientes tareas:
-        -   Leer cada archivo CSV.
-        -   Mapear los nombres de las columnas antiguas a los nuevos nombres `camelCase` del esquema Prisma.
-        -   Transformar los datos al nuevo formato:
-            -   Hashear las contraseñas en texto plano de la tabla `mob_usuarios` usando una librería como `bcrypt`.
-            -   Convertir los `INT` de las claves primarias/foráneas a los nuevos `String` (CUIDs), manteniendo un mapa de correspondencia en memoria (ej. `old_user_id: 1` -> `new_user_id: 'clg..._random'`).
-            -   Asegurar que los formatos de fecha sean compatibles con `DateTime` de Prisma.
-
-3.  **Load (Cargar):**
-    -   El mismo script de Node.js utilizará el **Cliente de Prisma** para cargar los datos transformados en la base de datos PostgreSQL.
-    -   Usaremos el método `createMany` de Prisma para una inserción masiva y eficiente de los datos, respetando el orden de las dependencias (ej. `User` antes que `Building`).
-
-Este script de migración será una herramienta de un solo uso, pero es fundamental para garantizar una transición de datos limpia y sin pérdidas.
+2.  **Transform & Load (Transformar y Cargar con un Script):**
+    -   Se creará un script de un solo uso en `scripts/migrate.ts`.
+    -   **Librerías a usar**: `fs/promises` para leer archivos, `csv-parse` para procesar los CSV, y `@prisma/client` para escribir en la nueva BD.
+    -   **Lógica del Script:**
+        a.  **Mantener un mapa de IDs:** `const oldToNewIdMap = new Map<number, string>();`
+        b.  **Procesar `usuarios.csv` primero:**
+            -   Leer cada fila.
+            -   Para cada usuario, generar un nuevo CUID: `const newId = cuid();`.
+            -   Guardar la correspondencia: `oldToNewIdMap.set(old_user_id, newId);`.
+            -   **Hashear la contraseña**: `const hashedPassword = await bcrypt.hash(row.pass, 12);`.
+            -   Usar `prisma.user.create()` para insertar el nuevo usuario con `id: newId` y `password: hashedPassword`.
+        c.  **Procesar tablas dependientes (ej. `edificios.csv`):**
+            -   Leer cada fila.
+            -   Obtener el nuevo ID de usuario del mapa: `const newUserId = oldToNewIdMap.get(row.id_usuario);`.
+            -   Si no se encuentra, registrar un error (integridad de datos).
+            -   Crear el nuevo registro de edificio usando `prisma.building.create()`, asignando el `newUserId` al campo `userId`.
+        d.  Repetir el proceso para todas las tablas, respetando las dependencias. Usar `createMany` para inserciones masivas cuando sea posible para mejorar el rendimiento.

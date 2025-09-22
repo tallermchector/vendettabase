@@ -1,205 +1,179 @@
-# Fase 3: Backend y Lógica de Negocio
+# Fase 3: Backend y Lógica de Negocio (Revisado)
 
-Este documento describe la arquitectura del backend, que residirá completamente dentro del proyecto Next.js utilizando API Routes (Route Handlers) y Next-Auth.js para la autenticación.
+Este documento describe la arquitectura del backend, que residirá completamente dentro del proyecto Next.js en el directorio `src/`. Se utilizarán **API Routes (Route Handlers)** para puntos de entrada externos (como webhooks o crons) y **Server Actions** para las mutaciones de datos iniciadas por el cliente.
 
 ## 1. Sección de Autenticación (Next-Auth.js)
 
-La autenticación es la puerta de entrada a la aplicación. Usaremos Next-Auth.js por su profunda integración con Next.js y su extensibilidad.
+La autenticación es la puerta de entrada a la aplicación. Usaremos Next-Auth.js por su profunda integración con Next.js.
 
-### 1.1. Configuración
+### 1.1. Configuración y Estructura
 
-Primero, instala Next-Auth y su adaptador de Prisma:
+La configuración de Next-Auth se modularizará para mayor claridad.
 
-```bash
-npm install next-auth @auth/prisma-adapter
-```
-
-A continuación, crea la ruta `catch-all` que gestionará todas las peticiones de autenticación.
-
-**Archivo: `app/api/auth/[...nextauth]/route.ts`**
+**1. Opciones de Autenticación (`src/lib/core/auth.ts`):**
+Se extrae la configuración a un archivo separado para poder importarla tanto en el *route handler* como en otros lugares del servidor.
 
 ```typescript
-import NextAuth from "next-auth";
+// src/lib/core/auth.ts
 import { PrismaAdapter } from "@auth/prisma-adapter";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "@/lib/core/prisma"; // Importar instancia única de Prisma
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcrypt";
+import type { NextAuthOptions } from "next-auth";
 
-const prisma = new PrismaClient();
-
-export const authOptions = {
+export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma),
   providers: [
     CredentialsProvider({
       name: "Credentials",
       credentials: {
-        email: { label: "Email", type: "text", placeholder: "john.doe@example.com" },
+        email: { label: "Email", type: "text" },
         password: { label: "Password", type: "password" }
       },
       async authorize(credentials) {
-        if (!credentials?.email || !credentials?.password) {
-          return null;
-        }
+        if (!credentials?.email || !credentials?.password) return null;
 
-        const user = await prisma.user.findUnique({
-          where: { email: credentials.email }
-        });
-
-        if (!user) {
-          return null;
-        }
+        const user = await prisma.user.findUnique({ where: { email: credentials.email } });
+        if (!user) return null;
 
         const isPasswordValid = await bcrypt.compare(credentials.password, user.password);
+        if (!isPasswordValid) return null;
 
-        if (!isPasswordValid) {
-          return null;
-        }
-
-        return {
-          id: user.id,
-          name: user.username,
-          email: user.email,
-        };
+        return { id: user.id, name: user.username, email: user.email };
       }
     })
   ],
-  session: {
-    strategy: "jwt",
-  },
-  secret: process.env.NEXTAUTH_SECRET, // Necesario en producción
+  session: { strategy: "jwt" },
+  secret: process.env.NEXTAUTH_SECRET,
   callbacks: {
-    async session({ session, token }) {
-      if (token) {
+    session({ session, token }) {
+      if (token && session.user) {
         session.user.id = token.sub; // Añadir el ID del usuario a la sesión
       }
       return session;
     },
   },
 };
+```
+
+**2. Route Handler de Next-Auth (`src/app/api/auth/[...nextauth]/route.ts`):**
+Este archivo ahora es mucho más simple, solo importa la configuración y la exporta.
+
+```typescript
+// src/app/api/auth/[...nextauth]/route.ts
+import NextAuth from "next-auth";
+import { authOptions } from "@/lib/core/auth";
 
 const handler = NextAuth(authOptions);
 
 export { handler as GET, handler as POST };
 ```
 
-### 1.2. Adaptador de Prisma y Proveedor de Credenciales
+### 1.2. Protección de Lógica
 
--   **`@auth/prisma-adapter`**: Este adaptador es crucial. Conecta Next-Auth a tu base de datos a través de Prisma. Gestiona automáticamente la creación y actualización de los modelos `User`, `Account`, `Session`, y `VerificationToken`, ahorrando una gran cantidad de trabajo manual.
--   **`CredentialsProvider`**: Configuramos este proveedor para un login clásico con email y contraseña. La función `authorize` es el núcleo de la lógica:
-    1.  Busca un usuario en la base de datos por su email.
-    2.  Compara la contraseña proporcionada con el hash almacenado usando `bcrypt`.
-    3.  Si la validación es exitosa, devuelve el objeto del usuario para iniciar la sesión.
+Protegeremos toda la lógica de negocio, ya sea en API Routes o en Server Actions.
 
-### 1.3. Protección de Rutas
-
-Protegeremos tanto las páginas del frontend como los endpoints de la API.
-
--   **Middleware para el Frontend:** Para proteger páginas completas, se puede usar un archivo `middleware.ts` en la raíz del proyecto. Este interceptará las peticiones y redirigirá a los usuarios no autenticados.
-
--   **Protección de API Routes:** Dentro de cada API Route que requiera autenticación, debemos verificar la sesión del usuario.
+-   **En Server Actions:** La sesión se obtiene directamente al principio de la acción.
 
     ```typescript
+    // src/lib/features/someFeature/actions.ts
+    "use server";
+    import { authOptions } from "@/lib/core/auth";
     import { getServerSession } from "next-auth/next";
-    import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
-    // Dentro de una función de API Route (ej. POST)
-    const session = await getServerSession(authOptions);
-
-    if (!session || !session.user) {
-      return new Response(JSON.stringify({ message: "No autorizado" }), { status: 401 });
+    export async function someSecureAction() {
+      const session = await getServerSession(authOptions);
+      if (!session?.user?.id) {
+        throw new Error("No autenticado");
+      }
+      // Lógica segura aquí...
     }
+    ```
+-   **En API Routes (para Crons/Webhooks):** La protección se basa en una clave secreta.
 
-    // A partir de aquí, puedes usar session.user.id para operaciones de base de datos
-    const userId = session.user.id;
+    ```typescript
+    // src/app/api/cron/update-points/route.ts
+    export async function POST(req: Request) {
+      const authorization = req.headers.get("Authorization");
+      if (authorization !== `Bearer ${process.env.CRON_SECRET}`) {
+        return new Response("Unauthorized", { status: 401 });
+      }
+      // Lógica del cron aquí...
+      return new Response("OK", { status: 200 });
+    }
     ```
 
-## 2. Sección de Lógica de Juego (API Routes)
+## 2. Lógica de Juego: Server Actions > API Routes
 
-Los *Route Handlers* de Next.js (dentro de `app/api/`) son el reemplazo directo de la arquitectura de controladores y modelos de PHP. Cada archivo define funciones `GET`, `POST`, `PUT`, `DELETE` que se mapean a los métodos HTTP.
+Con la arquitectura moderna del App Router, la mayoría de la lógica de negocio iniciada por el cliente (mejorar un edificio, atacar, etc.) se implementará con **Server Actions** en lugar de API Routes. Esto reduce la sobrecarga, simplifica el código y mejora la experiencia del desarrollador. Las API Routes se reservan para casos donde un endpoint HTTP explícito es necesario (Crons, Webhooks).
 
-### 2.1. Diseño de API
+### 2.1. Diseño de Lógica Modular
 
-Proponemos una estructura RESTful para las acciones del juego, organizando los endpoints por recurso.
+La lógica se organizará por "feature" (funcionalidad) dentro de `src/lib/features/`.
 
--   `GET /api/game/resources`: Obtener los recursos actuales del jugador.
--   `GET /api/game/buildings`: Listar los edificios y sus niveles.
--   `POST /api/game/buildings`: Iniciar la construcción o mejora de un edificio.
--   `POST /api/game/combat/attack`: Iniciar un ataque contra otro jugador.
--   `GET /api/game/combat/reports`: Listar los informes de batalla.
--   `POST /api/game/missions`: Enviar una nueva misión (transporte, espionaje, etc.).
+-   `src/lib/features/buildings/actions.ts`: Server Actions para construir y mejorar edificios.
+-   `src/lib/features/combat/actions.ts`: Server Actions para iniciar ataques.
+-   `src/lib/features/combat/queries.ts`: Funciones para obtener datos de combate (ej. informes).
 
-### 2.2. Implementación de una Ruta Crítica: Ataque
+### 2.2. Implementación de una Acción Crítica: Ataque
 
-A continuación, se detalla el código y la lógica para el endpoint `POST /api/game/combat/attack`.
+A continuación, se detalla el código y la lógica para la **Server Action** `attackPlayerAction`.
 
-**Archivo: `app/api/game/combat/attack/route.ts`**
+**Archivo: `src/lib/features/combat/actions.ts`**
 
 ```typescript
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import { PrismaClient } from "@prisma/client";
-import { z } from "zod";
+"use server";
 
-const prisma = new PrismaClient();
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/lib/core/auth";
+import { prisma } from "@/lib/core/prisma";
+import { z } from "zod";
+import { revalidatePath } from "next/cache";
 
 // Esquema de validación del payload con Zod
 const attackPayloadSchema = z.object({
   targetPlayerId: z.string().cuid(),
   troops: z.array(z.object({
-    unitId: z.string(),
+    unitId: z.string(), // ej. "thug", "gunman"
     count: z.number().min(1),
   })).min(1),
 });
 
-export async function POST(req: Request) {
+export async function attackPlayerAction(payload: unknown) {
   // 1. Seguridad: Verificar la sesión del usuario
   const session = await getServerSession(authOptions);
-  if (!session || !session.user?.id) {
-    return new Response(JSON.stringify({ message: "No autorizado" }), { status: 401 });
+  if (!session?.user?.id) {
+    return { error: "No autorizado" };
   }
   const attackerId = session.user.id;
 
   // 2. Validación del Payload
-  const body = await req.json();
-  const validation = attackPayloadSchema.safeParse(body);
+  const validation = attackPayloadSchema.safeParse(payload);
   if (!validation.success) {
-    return new Response(JSON.stringify({ message: "Payload inválido", errors: validation.error.errors }), { status: 400 });
+    return { error: "Payload inválido", details: validation.error.flatten() };
   }
   const { targetPlayerId, troops } = validation.data;
 
   try {
-    // 3. Lógica de Negocio: Obtener datos para el combate
-    const [attacker, defender] = await Promise.all([
-      prisma.user.findUnique({ where: { id: attackerId }, include: { /* tropas, research, etc. */ } }),
-      prisma.user.findUnique({ where: { id: targetPlayerId }, include: { /* tropas, research, etc. */ } }),
-    ]);
+    // 3. Lógica de Negocio y Atomicidad con Transacción
+    const battleReport = await prisma.$transaction(async (tx) => {
+      // Obtener datos del atacante y defensor DENTRO de la transacción
+      const attacker = await tx.user.findUnique({ where: { id: attackerId }, include: { /* tropas, research, etc. */ } });
+      const defender = await tx.user.findUnique({ where: { id: targetPlayerId }, include: { /* tropas, research, etc. */ } });
 
-    if (!attacker || !defender) {
-      return new Response(JSON.stringify({ message: "Atacante o defensor no encontrado" }), { status: 404 });
-    }
+      if (!attacker || !defender) throw new Error("Atacante o defensor no encontrado");
+      // Validar que el atacante tiene suficientes tropas...
 
-    // 4. Ejecutar la lógica de combate (simulación)
-    // Aquí se portaría y adaptaría la lógica del antiguo `Simulador.php`.
-    // Esta función calcularía las pérdidas, el resultado y los recursos saqueados.
-    const combatResult = runCombatSimulation(attacker, defender, troops);
+      // 4. Ejecutar la lógica de combate (simulación)
+      // Esta función pura calcularía pérdidas, resultado y botín.
+      const combatResult = runCombatSimulation(attacker, defender, troops);
 
-    // 5. Atomicidad: Realizar mutaciones en la base de datos
-    // Usamos una transacción para garantizar que todas las operaciones se completen o ninguna lo haga.
-    await prisma.$transaction(async (tx) => {
-      // Actualizar las tropas del atacante (restando las pérdidas)
-      await tx.troop.update({
-        where: { /* ... */ },
-        data: { /* ... */ },
-      });
+      // 5. Realizar mutaciones en la base de datos
+      // await tx.troop.update(...); // Actualizar tropas del atacante
+      // await tx.troop.update(...); // Actualizar tropas del defensor
 
-      // Actualizar las tropas del defensor
-      await tx.troop.update({
-        where: { /* ... */ },
-        data: { /* ... */ },
-      });
-
-      // Crear el informe de batalla para ambos jugadores
-      await tx.battle.create({
+      // Crear el informe de batalla
+      const newBattle = await tx.battle.create({
         data: {
           attackerId: attacker.id,
           defenderId: defender.id,
@@ -207,14 +181,19 @@ export async function POST(req: Request) {
           // ... otros datos del informe
         },
       });
+
+      return newBattle;
     });
 
-    // 6. Devolver una respuesta exitosa
-    return new Response(JSON.stringify({ message: "Ataque completado", reportId: "..." }), { status: 200 });
+    // 6. Revalidar cachés para actualizar la UI
+    revalidatePath("/dashboard");
+    revalidatePath("/messages"); // Para el informe de batalla
+
+    return { success: true, reportId: battleReport.id };
 
   } catch (error) {
     console.error("Error en el ataque:", error);
-    return new Response(JSON.stringify({ message: "Error interno del servidor" }), { status: 500 });
+    return { error: error.message || "Error interno del servidor" };
   }
 }
 
@@ -226,44 +205,18 @@ function runCombatSimulation(attacker, defender, troops) {
 
 ## 3. Sección de Tareas Programadas (Cron Jobs)
 
-Los scripts que antes se encontraban en `application/crons/` (ej. actualización de puntos, producción de recursos) se pueden migrar de dos maneras modernas:
+La estrategia para los crons sigue siendo la misma, pero las rutas de los endpoints ahora están dentro de `src/`.
 
-1.  **Vercel Cron Jobs (Recomendado):** Si el proyecto se despliega en Vercel, esta es la solución más sencilla. Se define la tarea directamente en el archivo `vercel.json`.
-
-    **Archivo: `vercel.json`**
-    ```json
-    {
-      "crons": [
+-   **Vercel Cron Jobs (Recomendado):** Se define la tarea en `vercel.json` apuntando al endpoint de la API.
+    -   **Archivo: `vercel.json`**
+        ```json
         {
-          "path": "/api/cron/update-points",
-          "schedule": "0 0 * * *" // Todos los días a medianoche
-        },
-        {
-          "path": "/api/cron/update-resources",
-          "schedule": "*/5 * * * *" // Cada 5 minutos
+          "crons": [
+            {
+              "path": "/api/cron/update-points",
+              "schedule": "0 0 * * *"
+            }
+          ]
         }
-      ]
-    }
-    ```
-
-2.  **Servicio Externo (GitHub Actions, EasyCron):** Se puede configurar un servicio externo para que envíe una petición `POST` a un endpoint de nuestra API en un intervalo regular.
-
-En ambos casos, el endpoint de la API (`/api/cron/...`) debe estar protegido para evitar que sea ejecutado por actores maliciosos. Esto se logra verificando una clave secreta (un "bearer token") enviada en la cabecera de la petición.
-
-**Ejemplo de endpoint de cron protegido:**
-```typescript
-// app/api/cron/update-points/route.ts
-export async function POST(req: Request) {
-  const authorization = req.headers.get("Authorization");
-
-  if (authorization !== `Bearer ${process.env.CRON_SECRET}`) {
-    return new Response("Unauthorized", { status: 401 });
-  }
-
-  // Lógica de actualización de puntos...
-  // ...
-
-  return new Response("OK", { status: 200 });
-}
-```
-`CRON_SECRET` sería una variable de entorno segura.
+        ```
+-   El endpoint (`src/app/api/cron/update-points/route.ts`) debe estar protegido con una clave secreta, como se describió anteriormente.

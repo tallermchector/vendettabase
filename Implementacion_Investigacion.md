@@ -1,220 +1,170 @@
-# Implementación: Árbol de Investigación
+# Implementación Detallada: Árbol de Investigación (Revisado)
 
-Este documento proporciona una guía técnica completa y autocontenida para desarrollar la página del **Árbol de Investigación**, que corresponde a la antigua `investigacion.php`. Esta interfaz permite a los usuarios ver sus niveles de tecnología, los requisitos para nuevas investigaciones y comenzar a investigar nuevas tecnologías.
+Este documento proporciona una guía técnica completa y autocontenida para desarrollar la página del **Árbol de Investigación**, que corresponde a la antigua `investigacion.php`.
 
 ---
 
 ### **1. Ruta del Archivo**
 
-`app/research/page.tsx`
+`src/app/research/page.tsx`
 
 ---
 
 ### **2. Objetivo de la Página**
 
-El objetivo es crear una interfaz clara donde el jugador pueda:
-1.  Ver todas las tecnologías disponibles en el juego.
-2.  Consultar el nivel actual de cada una de sus tecnologías.
-3.  Ver los requisitos (recursos, edificios, otras tecnologías) para el siguiente nivel.
-4.  Iniciar una nueva investigación si cumple con todos los requisitos.
-5.  Ver el progreso de la investigación activa.
+Crear una interfaz donde el jugador pueda ver todas las tecnologías, su nivel actual, los requisitos para el siguiente nivel, e iniciar una nueva investigación si cumple con las condiciones.
 
 ---
 
-### **3. Obtención de Datos y Lógica del Servidor**
+### **3. Tablas y Campos de Base de Datos Utilizados**
 
-La página `page.tsx` será un **Server Component**, obteniendo todos los datos necesarios en el servidor para una carga inicial rápida y segura.
+-   **`User`**:
+    -   `id`: Para asociar la investigación y los recursos.
+-   **`Research`** (relacionado con `User`):
+    -   Contiene los niveles actuales de todas las tecnologías (ej. `combate`, `espionaje`).
+-   **`ActiveResearch`** (relacionado con `User`):
+    -   `id`, `research`, `level`, `finishesAt`: Para mostrar la cola de investigación activa (solo puede haber una).
+-   **`Building`** y **`Room`** (relacionados con `User`):
+    -   Para verificar los recursos del jugador y los niveles de edificios requeridos para desbloquear ciertas tecnologías.
 
-**Lógica de `app/research/page.tsx`:**
+---
+
+### **4. Lógica de Obtención de Datos (Queries)**
+
+La página será un **Server Component** que obtiene sus datos a través de una función de consulta específica.
+
+**`src/lib/features/research/queries.ts`**:
+
+```typescript
+import { prisma } from "@/lib/core/prisma";
+import { cache } from 'react';
+
+export const getResearchPageData = cache(async (userId: string) => {
+  const playerData = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      research: true,
+      activeResearch: true,
+      buildings: {
+        take: 1,
+        select: {
+          armament: true,
+          munition: true,
+          dollars: true,
+          rooms: true,
+        }
+      },
+    }
+  });
+
+  // Aquí también se obtendrían los datos estáticos del juego (costos, requisitos, etc.)
+  // const gameData = getGameRules('research');
+
+  return { playerData, /* gameData */ };
+});
+```
+
+**`src/app/research/page.tsx`**:
 
 ```tsx
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import { prisma } from "@/lib/prisma";
+import { authOptions } from "@/lib/core/auth";
+import { getResearchPageData } from "@/lib/features/research/queries";
 import { redirect } from "next/navigation";
-
-// Importar componentes y datos estáticos del juego
-import { ResearchTree } from "@/components/research/ResearchTree";
-import { ActiveResearchQueue } from "@/components/research/ActiveResearchQueue";
-import { ResourceDisplay } from "@/components/shared/ResourceDisplay";
-import { getGameData } from "@/lib/gameData"; // Helper para obtener costos, tiempos, etc.
+import { ResearchView } from "@/components/features/research/ResearchView";
 
 export default async function ResearchPage() {
-  // 1. Autenticación y obtención de datos del usuario
   const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    redirect("/login");
-  }
-  const userId = session.user.id;
+  if (!session?.user?.id) redirect("/login");
 
-  // 2. Obtener los datos de investigación y recursos del usuario
-  const [playerData, activeResearch] = await Promise.all([
-    prisma.user.findUnique({
-      where: { id: userId },
-      include: {
-        research: true, // Niveles actuales de cada tecnología
-        buildings: { // Necesitamos los edificios para los recursos y requisitos
-          include: {
-            rooms: true,
-          },
-          // Asumimos que se gestiona el planeta principal
-          take: 1,
-          where: { /* Lógica para seleccionar el planeta correcto */ }
-        },
-      },
-    }),
-    prisma.activeResearch.findFirst({
-      where: { userId },
-    }),
-  ]);
+  const data = await getResearchPageData(session.user.id);
+  if (!data.playerData) return <div>Error al cargar datos.</div>;
 
-  if (!playerData?.research || playerData.buildings.length === 0) {
-    return <div>Error: No se encontró información de investigación o planetas.</div>;
-  }
-
-  const mainBuilding = playerData.buildings[0];
-
-  // 3. Obtener los datos estáticos de todas las tecnologías
-  const allResearchData = getGameData("research");
-
-  // 4. Pasar los datos a los componentes hijos
-  return (
-    <div className="container mx-auto p-4">
-      <h1 className="text-3xl font-bold mb-4">Árbol de Investigación</h1>
-
-      <ResourceDisplay resources={mainBuilding} />
-
-      {activeResearch && (
-        <ActiveResearchQueue research={activeResearch} />
-      )}
-
-      <div className="mt-6">
-        <h2 className="text-2xl font-semibold mb-3">Tecnologías Disponibles</h2>
-        <ResearchTree
-          currentResearchLevels={playerData.research}
-          allResearchData={allResearchData}
-          userResources={mainBuilding}
-          userBuildingLevels={mainBuilding.rooms}
-          activeResearch={activeResearch}
-        />
-      </div>
-    </div>
-  );
+  return <ResearchView initialData={data.playerData} />;
 }
 ```
 
 ---
 
-### **4. Desglose de Componentes**
+### **5. Desglose de Componentes**
 
-#### **4.1. `ResearchTree` (Server Component)**
--   **Ruta:** `components/research/ResearchTree.tsx`
--   **Propósito:** Orquesta la renderización de la lista completa de tecnologías.
--   **Lógica:** Itera sobre `allResearchData`. Para cada tecnología, calcula los costos, tiempos y verifica si se cumplen los requisitos. Pasa esta información consolidada al componente `ResearchItem`.
-
-#### **4.2. `ResearchItem` (Client Component)**
--   **Ruta:** `components/research/ResearchItem.tsx`
--   **Propósito:** Muestra una tecnología, su nivel, requisitos y el botón para investigar.
--   **Props:** `{ researchData, currentLevel, nextLevelCost, requirements, canAfford, requirementsMet, isResearching, activeResearch }`
+#### **`ResearchView` (Client Component)**
+-   **Ruta:** `src/components/features/research/ResearchView.tsx`
+-   **Propósito:** Organiza la UI de la página de investigación.
+-   **Props:** `{ initialData }`
 -   **Lógica:**
-    -   Es un **Client Component** (`"use client"`) para manejar la interacción del botón.
-    -   Muestra el nombre, nivel, descripción, costo y requisitos (ej. "Requiere Oficina Nivel 5").
-    -   El botón "Investigar" se deshabilita (`disabled`) si:
-        1.  `activeResearch` no es nulo (ya hay algo investigándose).
-        2.  `canAfford` es `false`.
-        3.  `requirementsMet` es `false`.
-    -   Al hacer clic, invoca la `startResearchAction`.
+    -   Marcado con `"use client"`.
+    -   Muestra la cola de investigación activa si `initialData.activeResearch` existe.
+    -   Renderiza la lista de tecnologías (`ResearchTree`), pasando los datos necesarios.
 
-```tsx
-"use client";
-import { useTransition } from 'react';
-import { startResearchAction } from '@/app/actions/researchActions';
+#### **`ResearchTree` (Server Component anidado o Client Component)**
+-   **Ruta:** `src/components/features/research/ResearchTree.tsx`
+-   **Propósito:** Muestra la lista de todas las tecnologías.
+-   **Lógica:** Itera sobre los datos estáticos de las tecnologías y, para cada una, renderiza un `ResearchItem`. Calcula y pasa las props necesarias como `currentLevel`, `nextLevelCost`, `requirementsMet`, etc.
 
-export function ResearchItem({ researchData, ...props }) {
-  const [isPending, startTransition] = useTransition();
-
-  const isDisabled = !!props.activeResearch || !props.canAfford || !props.requirementsMet || isPending;
-
-  const handleResearch = () => {
-    startTransition(async () => {
-      const result = await startResearchAction(researchData.id);
-      if (result?.error) {
-        alert(`Error: ${result.error}`); // Usar un sistema de notificaciones
-      }
-    });
-  };
-
-  return (
-    <div className="border p-4 rounded-lg">
-      <h3 className="text-xl font-bold">{researchData.name} (Nivel {props.currentLevel})</h3>
-      <p>Costo: {props.nextLevelCost.dollars} Dólares</p>
-      {/* Mostrar requisitos aquí */}
-      <button onClick={handleResearch} disabled={isDisabled} className="...">
-        {isPending ? 'Investigando...' : 'Investigar'}
-      </button>
-    </div>
-  );
-}
-```
-
-#### **4.3. `ActiveResearchQueue` (Client Component)**
--   **Ruta:** `components/research/ActiveResearchQueue.tsx`
--   **Propósito:** Muestra la investigación actualmente en curso.
--   **Props:** `{ research: ActiveResearch }`
--   **Lógica:** Es un **Client Component** que muestra el nombre de la tecnología que se está investigando y un temporizador de cuenta regresiva (`CountdownTimer`), similar al de las otras colas.
+#### **`ResearchItem` (Client Component)**
+-   **Ruta:** `src/components/features/research/ResearchItem.tsx`
+-   **Propósito:** Muestra una única tecnología y el botón para investigar.
+-   **Props:** `{ researchData, ... }`
+-   **Lógica:**
+    -   Muestra el nombre, nivel, descripción, costo y requisitos.
+    -   El botón "Investigar" se deshabilita si ya hay una investigación activa, si no se cumplen los requisitos o si no hay recursos.
+    -   El `onClick` del botón invoca la `startResearchAction` usando `useTransition`.
 
 ---
 
-### **5. Server Actions Relevantes**
+### **6. Lógica de Mutación de Datos (Server Actions)**
 
-La acción para iniciar una investigación debe ser atómica para evitar que un usuario inicie múltiples investigaciones a la vez.
+La acción para iniciar una investigación debe ser atómica y realizar todas las validaciones en el servidor.
 
-#### **Acción: `startResearchAction`**
--   **Ruta:** `app/actions/researchActions.ts`
--   **Parámetros:** `(researchType: string)` (ej. 'combate', 'espionaje')
--   **Lógica:**
-    1.  Declarar la función con `"use server"`.
-    2.  Obtener la sesión del usuario.
-    3.  **Iniciar una transacción de base de datos** con `prisma.$transaction`.
-    4.  **Dentro de la transacción:**
-        a.  **Leer datos frescos:** Obtener el `Research` del usuario, sus `Building` (para recursos) y sus `Rooms` (para requisitos de nivel). Volver a consultar si hay una `ActiveResearch` para el usuario para una validación final y segura.
-        b.  **Validar:**
-            -   Si `ActiveResearch` existe, `throw new Error("Ya hay una investigación en curso.")`.
-            -   Obtener los datos estáticos de `researchType` (costos, requisitos de edificios).
-            -   Verificar que se cumplen los requisitos de nivel de edificios. Si no, `throw new Error("No se cumplen los requisitos.")`.
-            -   Calcular el costo del siguiente nivel y verificar que el usuario tiene suficientes recursos. Si no, `throw new Error("Recursos insuficientes.")`.
-        c.  **Ejecutar mutaciones:**
-            -   Restar los recursos del registro `Building` del usuario.
-            -   Crear una nueva entrada en la tabla `ActiveResearch` con los detalles de la investigación y la fecha de finalización.
-    5.  Si la transacción tiene éxito, llamar a `revalidatePath('/research')` y `revalidatePath('/dashboard')`.
-    6.  Devolver un objeto `{ success: true }` o `{ error: "Mensaje" }` para que el frontend pueda mostrar una notificación.
+**`src/lib/features/research/actions.ts`**:
 
 ```typescript
-// app/actions/researchActions.ts
 "use server";
-
-// ... (imports)
+import { prisma } from "@/lib/core/prisma";
+import { authOptions } from "@/lib/core/auth";
+import { getServerSession } from "next-auth/next";
+import { revalidatePath } from "next/cache";
+// import { getResearchUpgradeCost, getResearchRequirements } from '@/lib/gameRules';
 
 export async function startResearchAction(researchType: string) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return { error: "No autenticado" };
-  const userId = session.user.id;
 
   try {
     await prisma.$transaction(async (tx) => {
-      // Lógica de la transacción descrita:
-      // 1. Leer datos frescos (usuario, recursos, colas, etc.).
-      // 2. Validar que no hay otra investigación activa.
-      // 3. Validar requisitos y costos.
-      // 4. Restar recursos y crear la entrada en ActiveResearch.
+      // 1. Obtener datos frescos DENTRO de la transacción
+      const user = await tx.user.findUnique({
+        where: { id: session.user.id },
+        include: { research: true, activeResearch: true, buildings: { include: { rooms: true } } }
+      });
+
+      if (!user) throw new Error("Usuario no encontrado.");
+
+      // 2. Validaciones críticas
+      if (user.activeResearch) throw new Error("Ya hay una investigación en curso.");
+
+      // const requirements = getResearchRequirements(researchType);
+      // const userLevel = user.research[researchType];
+      // const buildingLevel = user.buildings[0]?.rooms[requirements.building];
+      // if (buildingLevel < requirements.level) throw new Error("Requisitos de edificio no cumplidos.");
+
+      // const cost = getResearchUpgradeCost(researchType, userLevel + 1);
+      // if (user.buildings[0].dollars < cost) throw new Error("Recursos insuficientes.");
+
+      // 3. Mutar los datos
+      // await tx.building.update(...); // Restar recursos
+      // await tx.activeResearch.create(...); // Añadir a la cola
     });
   } catch (error) {
     return { error: error.message };
   }
 
+  // 4. Revalidar la caché
   revalidatePath('/research');
   revalidatePath('/dashboard');
+
   return { success: true };
 }
 ```
-Este enfoque mantiene la lógica de negocio crítica y las validaciones de seguridad en el servidor, proporcionando una experiencia de usuario robusta y coherente.
+Este enfoque garantiza que un jugador no pueda iniciar más de una investigación a la vez y que todos los requisitos se verifiquen de forma segura en el servidor.

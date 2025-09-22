@@ -1,85 +1,91 @@
-# Implementación: Gestión de Familia (Alianza)
+# Implementación Detallada: Gestión de Familia (Alianza) (Revisado)
 
-Este documento proporciona una guía técnica completa y autocontenida para desarrollar la página de **Gestión de Familia**, que corresponde a la antigua `familia.php`. Esta sección es el centro neurálgico para todas las actividades sociales y de alianzas en el juego.
+Este documento proporciona una guía técnica completa y autocontenida para desarrollar la página de **Gestión de Familia**, que corresponde a la antigua `familia.php`.
 
 ---
 
 ### **1. Ruta del Archivo**
 
-`app/family/page.tsx`
+`src/app/family/page.tsx`
 
 ---
 
 ### **2. Objetivo de la Página**
 
-El objetivo es crear una interfaz multifacética que se adapte al estado del jugador:
-1.  **Si no es miembro:** Permitirle buscar y ver familias existentes, solicitar unirse o crear una nueva.
-2.  **Si es miembro:** Mostrarle un panel de control con los miembros, mensajes internos y la jerarquía de la familia.
-3.  **Si es líder (o tiene permisos):** Proporcionarle herramientas para gestionar miembros, solicitudes, rangos y la configuración de la familia.
+Crear una interfaz multifacética que se adapte al estado del jugador: si no es miembro, permitirle buscar o crear familias; si es miembro, mostrar un panel de control; y si es líder, proporcionar herramientas de gestión.
 
 ---
 
-### **3. Lógica Condicional y Obtención de Datos**
+### **3. Tablas y Campos de Base de Datos Utilizados**
 
-La página `page.tsx` será un **Server Component** que actuará como un enrutador, decidiendo qué vista mostrar basándose en el estado de membresía del usuario.
+-   **`Family`**: `id`, `name`, `tag`, `description`. El modelo central.
+-   **`FamilyMembership`**: `id`, `userId`, `familyId`, `rankId`. Conecta a los usuarios con las familias y sus rangos.
+-   **`FamilyRank`**: `id`, `name`, y todos los campos de permisos booleanos (ej. `canAcceptMembers`, `canKickMembers`).
+-   **`FamilyApplication`**: `id`, `userId`, `familyId`, `text`. Para las solicitudes pendientes.
+-   **`FamilyMessage`**: `id`, `message`, `createdAt`, `userId`. Para el chat interno.
+-   **`User`**: `id`, `username`, `pointsTotal`. Para mostrar información de miembros y solicitantes.
 
-**Lógica de `app/family/page.tsx`:**
+---
+
+### **4. Lógica de Obtención de Datos (Queries)**
+
+La página principal (`page.tsx`) es un **Server Component** que actúa como enrutador lógico.
+
+**`src/lib/features/family/queries.ts`**:
+
+```typescript
+import { prisma } from "@/lib/core/prisma";
+import { cache } from 'react';
+
+// Obtiene los datos de membresía del usuario actual
+export const getUserFamilyMembership = cache(async (userId: string) => {
+  return await prisma.familyMembership.findUnique({
+    where: { userId },
+    include: { rank: true }, // Incluir los permisos del rango
+  });
+});
+
+// Obtiene todos los datos de una familia para el dashboard
+export const getFamilyDashboardData = cache(async (familyId: string, userRank: FamilyRank) => {
+  return await prisma.family.findUnique({
+    where: { id: familyId },
+    include: {
+      members: { include: { user: { select: { username: true, pointsTotal: true } }, rank: true } },
+      ranks: true,
+      // Condicionalmente incluye las solicitudes si el usuario tiene permiso
+      applications: userRank.canAcceptMembers ? { include: { user: { select: { username: true } } } } : false,
+      messages: { include: { user: { select: { username: true } } }, take: 50, orderBy: { createdAt: 'desc' } },
+    },
+  });
+});
+
+// Obtiene una lista de todas las familias para el usuario no miembro
+export const getAllFamilies = cache(async () => {
+  return await prisma.family.findMany({
+    select: { id: true, name: true, tag: true, _count: { select: { members: true } } },
+  });
+});
+```
+
+**`src/app/family/page.tsx`**:
 
 ```tsx
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import { prisma } from "@/lib/prisma";
-import { redirect } from "next/navigation";
-
-// Importar los diferentes "paneles" o vistas
-import { FamilyDashboard } from "@/components/family/FamilyDashboard";
-import { NoFamilyView } from "@/components/family/NoFamilyView";
+// ... (imports)
+import { getUserFamilyMembership, getFamilyDashboardData, getAllFamilies } from "@/lib/features/family/queries";
+import { FamilyDashboard } from "@/components/features/family/FamilyDashboard";
+import { NoFamilyView } from "@/components/features/family/NoFamilyView";
 
 export default async function FamilyPage() {
   const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    redirect("/login");
-  }
-  const userId = session.user.id;
+  if (!session?.user?.id) redirect("/login");
 
-  // 1. Verificar si el usuario ya pertenece a una familia
-  const membership = await prisma.familyMembership.findUnique({
-    where: { userId },
-    include: {
-      family: true, // Incluir los datos de la familia
-      rank: true,   // Incluir los datos del rango del usuario
-    },
-  });
+  const membership = await getUserFamilyMembership(session.user.id);
 
   if (membership) {
-    // 2. Si es miembro, obtener todos los datos necesarios para el panel de control
-    const familyData = await prisma.family.findUnique({
-      where: { id: membership.familyId },
-      include: {
-        members: {
-          include: {
-            user: { select: { username: true, pointsTotal: true } },
-            rank: { select: { name: true } },
-          },
-        },
-        ranks: true,
-        applications: { // Solo obtener si el usuario tiene permisos
-          where: membership.rank.canAcceptMembers ? {} : { id: "never" }, // Truco para no obtener nada
-          include: { user: { select: { username: true } } },
-        },
-        messages: {
-          include: { user: { select: { username: true } } },
-          orderBy: { createdAt: 'desc' },
-          take: 50,
-        },
-      },
-    });
+    const familyData = await getFamilyDashboardData(membership.familyId, membership.rank);
     return <FamilyDashboard familyData={familyData} userRank={membership.rank} />;
   } else {
-    // 3. Si no es miembro, obtener la lista de familias para mostrar
-    const allFamilies = await prisma.family.findMany({
-      select: { id: true, name: true, tag: true, _count: { select: { members: true } } },
-    });
+    const allFamilies = await getAllFamilies();
     return <NoFamilyView families={allFamilies} />;
   }
 }
@@ -87,67 +93,79 @@ export default async function FamilyPage() {
 
 ---
 
-### **4. Desglose de Componentes**
+### **5. Desglose de Componentes**
 
-#### **Vista para No Miembros (`NoFamilyView`)**
--   **`FamilyList` (Server Component):** Muestra una tabla con las familias (`id`, `name`, `tag`, `member_count`). Cada fila puede ser un enlace a una página pública de perfil de familia (`/family/[familyId]`).
--   **`ApplyToFamilyButton` (Client Component):** Un botón que podría abrir un modal para escribir y enviar una solicitud, llamando a la `applyToFamilyAction`.
--   **`CreateFamilyForm` (Client Component):** Un formulario simple (`"use client"`) con campos para nombre y etiqueta. El botón de envío llama a `createFamilyAction` y usa `useTransition` para el estado de carga.
+Los componentes se dividen en dos vistas principales: `NoFamilyView` y `FamilyDashboard`.
 
-#### **Vista para Miembros (`FamilyDashboard`)**
--   **`FamilyHeader` (Server Component):** Muestra el nombre, etiqueta y descripción de la familia.
--   **`MemberList` (Client Component):**
-    -   Recibe la lista de miembros como prop.
-    -   Es un **Client Component** porque los líderes verán botones de acción junto a cada miembro.
-    -   Botones como "Expulsar", "Ascender", "Degradar" llaman a sus respectivas Server Actions (`kickMemberAction`, `changeRankAction`) y pasan el `membershipId` del miembro objetivo. Los botones se muestran condicionalmente según los permisos del `userRank`.
--   **`ApplicationList` (Client Component):**
-    -   Recibe la lista de solicitudes.
-    -   Muestra el nombre del solicitante y su mensaje.
-    -   Botones "Aceptar" y "Rechazar" que llaman a `acceptApplicationAction` y `rejectApplicationAction`.
--   **`RankManager` (Client Component):**
-    -   Interfaz compleja para que los líderes gestionen los rangos y permisos.
-    -   Muestra los rangos actuales y sus permisos.
-    -   Incluye formularios para editar un rango o crear uno nuevo, cada uno llamando a su propia Server Action.
--   **`FamilyChat` (Client Component):**
-    -   Muestra los últimos mensajes y un `textarea` para enviar uno nuevo.
-    -   El envío se gestiona con una Server Action (`postFamilyMessageAction`). Tras un envío exitoso, `revalidatePath('/family')` actualizará el chat.
+#### **`NoFamilyView` (Client Component)**
+-   **Ruta:** `src/components/features/family/NoFamilyView.tsx`
+-   **Propósito:** Interfaz para usuarios sin familia.
+-   **Lógica:** Muestra una lista de familias (`FamilyList`) y un formulario para crear una nueva (`CreateFamilyForm`), que llama a la `createFamilyAction`.
+
+#### **`FamilyDashboard` (Client Component)**
+-   **Ruta:** `src/components/features/family/FamilyDashboard.tsx`
+-   **Propósito:** Panel de control para miembros de la familia.
+-   **Lógica:** Utiliza un sistema de pestañas (`<Tabs>`) para separar las diferentes secciones: "Miembros", "Chat", "Gestión" (solo para líderes).
+
+#### **`MemberList` (Client Component)**
+-   **Ruta:** `src/components/features/family/MemberList.tsx`
+-   **Propósito:** Muestra los miembros y las acciones de gestión.
+-   **Lógica:** Muestra una lista de miembros. Si el `userRank` tiene permisos, muestra botones ("Expulsar", "Ascender") junto a cada miembro, que llaman a las Server Actions correspondientes.
 
 ---
 
-### **5. Server Actions Relevantes**
+### **6. Lógica de Mutación de Datos (Server Actions)**
 
-Las acciones de familia son críticas y **deben verificar los permisos del usuario en cada ejecución**.
+Todas las acciones deben realizar una comprobación de permisos al principio.
 
-#### **`createFamilyAction(formData)`**
--   **Lógica:** En una transacción, crea la `Family`, crea los `FamilyRank` por defecto (ej. "Líder", "Miembro"), y crea la `FamilyMembership` para el `userId`, asignándole el rango de "Líder". Llama a `revalidatePath('/family')`.
+**`src/lib/features/family/actions.ts`**:
 
-#### **`acceptApplicationAction(applicationId)`**
--   **Lógica:**
-    1.  Verificar que el usuario actual tiene el permiso `canAcceptMembers`.
-    2.  En una transacción:
-        a.  Leer la aplicación para obtener el `userId` y `familyId`.
-        b.  Eliminar la `FamilyApplication`.
-        c.  Crear una `FamilyMembership` para el nuevo usuario con el rango por defecto.
-    3.  Llamar a `revalidatePath('/family')`.
+```typescript
+"use server";
+import { prisma } from "@/lib/core/prisma";
+import { authOptions } from "@/lib/core/auth";
+import { getServerSession } from "next-auth/next";
+import { revalidatePath } from "next/cache";
 
-#### **`kickMemberAction(targetMembershipId)`**
--   **Lógica:**
-    1.  Verificar permisos del actor.
-    2.  Leer la membresía objetivo para asegurarse de que el actor no está intentando expulsar a alguien de un rango superior o a sí mismo.
-    3.  Eliminar el registro `FamilyMembership` con el `targetMembershipId`.
-    4.  Llamar a `revalidatePath('/family')`.
+// Ejemplo: Aceptar una solicitud
+export async function acceptApplicationAction(applicationId: string) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) return { error: "No autenticado" };
 
-#### **`changeRankAction(targetMembershipId, newRankId)`**
--   **Lógica:**
-    1.  Verificar permisos del actor.
-    2.  Validar que el `newRankId` pertenece a la misma familia.
-    3.  Actualizar el `rankId` en el registro `FamilyMembership`.
-    4.  Llamar a `revalidatePath('/family')`.
+  try {
+    await prisma.$transaction(async (tx) => {
+      // 1. Obtener membresía del actor para verificar permisos
+      const actorMembership = await tx.familyMembership.findUnique({
+        where: { userId: session.user.id },
+        include: { rank: true },
+      });
+      if (!actorMembership?.rank.canAcceptMembers) {
+        throw new Error("Permiso denegado.");
+      }
 
-#### **`postFamilyMessageAction(message)`**
--   **Lógica:**
-    1.  Verificar que el usuario es miembro de la familia.
-    2.  Crear un nuevo registro `FamilyMessage` asociado al `userId` y `familyId`.
-    3.  Llamar a `revalidatePath('/family')`.
+      // 2. Procesar la solicitud
+      const application = await tx.familyApplication.findUnique({ where: { id: applicationId } });
+      if (!application || application.familyId !== actorMembership.familyId) {
+        throw new Error("Solicitud no válida.");
+      }
 
-Este diseño maneja la complejidad de los permisos y los diferentes estados del usuario, manteniendo la lógica de negocio segura en el servidor y proporcionando una interfaz reactiva.
+      const defaultRank = await tx.familyRank.findFirst({ where: { familyId: application.familyId, isDefault: true } });
+      if (!defaultRank) throw new Error("Rango por defecto no encontrado.");
+
+      // 3. Crear membresía y borrar solicitud
+      await tx.familyMembership.create({
+        data: { userId: application.userId, familyId: application.familyId, rankId: defaultRank.id },
+      });
+      await tx.familyApplication.delete({ where: { id: applicationId } });
+    });
+  } catch (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath('/family');
+  return { success: true };
+}
+
+// ... (Otras acciones como kickMemberAction, createFamilyAction, etc.)
+```
+Este diseño modular y basado en permisos asegura que la gestión de la familia sea segura y robusta.
