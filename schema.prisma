@@ -1,0 +1,498 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -------------------------------------------------
+// Models for Next-Auth.js Adapter
+// -------------------------------------------------
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// -------------------------------------------------
+// Core Game Models (Migrated from mob_db.sql)
+// -------------------------------------------------
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  username      String    @unique
+  email         String    @unique
+  emailVerified DateTime?
+  password      String // Will store a hash, not plaintext
+  image         String?
+  language      String    @default("es")
+  isBanned      Boolean   @default(false)
+
+  pointsBuildings      Float @default(0)
+  pointsTroops         Float @default(0)
+  pointsResearch       Float @default(0)
+  lastOnline           DateTime @default(now())
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  // Relations
+  accounts             Account[]
+  sessions             Session[]
+  buildings            Building[]
+  research             Research?
+  activeResearch       ActiveResearch[]
+  newConstructions     NewConstruction[]
+  missionsInitiated    Mission[]        @relation("MissionInitiator")
+  missionsAll          MissionLog[]
+  battleReportsAsAttacker Battle[]      @relation("Attacker")
+  battleReportsAsDefender Battle[]      @relation("Defender")
+  bansReceived         Ban[]            @relation("BannedUser")
+  bansIssued           Ban[]            @relation("AdminUser")
+  logins               LoginLog[]
+  messagesSent         Message[]        @relation("Sender")
+  messagesReceived     Message[]        @relation("Recipient")
+  messageFolders       MessageFolder[]
+  familyMembership     FamilyMembership?
+  familyMessages       FamilyMessage[]
+  familyApplications   FamilyApplication[]
+  pointsHistory        PointsHistory[]
+}
+
+model Ban {
+  id        String   @id @default(cuid())
+  reason    String   @db.Text
+  bannedAt  DateTime @default(now())
+
+  // Relations
+  bannedUserId String
+  bannedUser   User   @relation("BannedUser", fields: [bannedUserId], references: [id])
+  adminId      String
+  adminUser    User   @relation("AdminUser", fields: [adminId], references: [id])
+
+  @@index([bannedUserId])
+  @@index([adminId])
+}
+
+model Battle {
+  id           String   @id @default(cuid())
+  htmlReport   String   @db.Text
+  result       String   @db.Text
+  attackerPts  Int
+  defenderPts  Int
+  attackerLoss Int
+  defenderLoss Int
+  foughtAt     DateTime @default(now())
+  lootedArmament Int
+  lootedMunition Int
+  lootedDollars  Int
+  lootedAlcohol  Int
+
+  // Relations
+  attackerId String
+  defenderId String
+  attacker   User   @relation("Attacker", fields: [attackerId], references: [id])
+  defender   User   @relation("Defender", fields: [defenderId], references: [id])
+}
+
+model Building {
+  id        String   @id @default(cuid())
+  coordX    Int
+  coordY    Int
+  coordZ    Int
+  points    Float    @default(0)
+  lastUpdate DateTime @updatedAt
+
+  // Resources
+  armament Int @default(0)
+  munition Int @default(0)
+  alcohol  Int @default(0)
+  dollars  Int @default(0)
+
+  // Relations
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+  rooms  Room?
+  troops Troop?
+  newConstructions NewConstruction[]
+  activeResearch   ActiveResearch[]
+  newTroops        NewTroop[]
+
+  @@unique([coordX, coordY, coordZ])
+  @@index([userId])
+}
+
+model Research {
+  id            String @id @default(cuid())
+  routes        Int    @default(0)
+  weapons       Int    @default(0)
+  errands       Int    @default(0)
+  extortion     Int    @default(0)
+  administration Int   @default(0)
+  smuggling     Int    @default(0)
+  espionage     Int    @default(0)
+  security      Int    @default(0)
+  protection    Int    @default(0)
+  combat        Int    @default(0)
+  shooting      Int    @default(0)
+  explosives    Int    @default(0)
+  guerrilla     Int    @default(0)
+  psychological Int    @default(0)
+  chemical      Int    @default(0)
+  honor         Int    @default(0)
+
+  // Relations
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id])
+}
+
+model ActiveResearch {
+  id          String   @id @default(cuid())
+  finishesAt  DateTime
+  duration    Int
+  research    String
+  level       Int
+  coordinates String // e.g., "1:2:3"
+
+  // Relations
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  buildingId String
+  building   Building @relation(fields: [buildingId], references: [id])
+
+  @@index([userId])
+}
+
+model Room {
+  id          String @id @default(cuid())
+  office      Int    @default(0)
+  school      Int    @default(0)
+  armory      Int    @default(0)
+  munition    Int    @default(0)
+  brewery     Int    @default(0)
+  tavern      Int    @default(0)
+  smuggling   Int    @default(0)
+  vaultArm    Int    @default(0)
+  vaultMun    Int    @default(0)
+  vaultAlc    Int    @default(0)
+  vaultDol    Int    @default(0)
+  shootingRange Int  @default(0)
+  security    Int    @default(0)
+  turret      Int    @default(0)
+  minefield   Int    @default(0)
+
+  // Relations
+  buildingId String   @unique
+  building   Building @relation(fields: [buildingId], references: [id])
+}
+
+model NewConstruction {
+  id         String   @id @default(cuid())
+  finishesAt DateTime
+  duration   Int
+  room       String
+  level      Int
+  coordinates String // e.g., "1:2:3"
+
+  // Relations
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  buildingId String
+  building   Building @relation(fields: [buildingId], references: [id])
+
+  @@index([userId])
+  @@index([buildingId])
+}
+
+model LoginLog {
+  id     String   @id @default(cuid())
+  ip     String
+  date   DateTime @default(now())
+
+  // Relations
+  userId String
+  user   User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model Message {
+  id              String    @id @default(cuid())
+  subject         String
+  body            String    @db.Text
+  sentAt          DateTime  @default(now())
+  isRead          Boolean   @default(false)
+  deletedBySender Boolean   @default(false)
+  deletedByRecipient Boolean @default(false)
+
+  // Relations
+  senderId    String
+  recipientId String
+  folderId    String?
+  sender      User          @relation("Sender", fields: [senderId], references: [id])
+  recipient   User          @relation("Recipient", fields: [recipientId], references: [id])
+  folder      MessageFolder? @relation(fields: [folderId], references: [id])
+
+  @@index([senderId])
+  @@index([recipientId])
+  @@index([folderId])
+}
+
+model MessageFolder {
+  id      String    @id @default(cuid())
+  name    String
+
+  // Relations
+  userId  String
+  user    User      @relation(fields: [userId], references: [id])
+  messages Message[]
+
+  @@index([userId])
+}
+
+enum MissionType {
+  ATTACK
+  TRANSPORT
+  DEPLOY
+  SPY
+  COLONIZE
+}
+
+model Mission {
+  id          String      @id @default(cuid())
+  troopData   Json // { "maton": 100, "pistolero": 50 }
+  originX     Int
+  originY     Int
+  originZ     Int
+  destX       Int
+  destY       Int
+  destZ       Int
+  type        MissionType
+  startedAt   DateTime    @default(now())
+  finishesAt  DateTime
+  duration    Int
+
+  // Resources
+  lootedArmament Int @default(0)
+  lootedMunition Int @default(0)
+  lootedAlcohol  Int @default(0)
+  lootedDollars  Int @default(0)
+
+  // Relations
+  userId String
+  user   User   @relation("MissionInitiator", fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model MissionLog {
+  id          String      @id @default(cuid())
+  troopData   Json
+  originX     Int
+  originY     Int
+  originZ     Int
+  destX       Int
+  destY       Int
+  destZ       Int
+  type        MissionType
+  startedAt   DateTime
+  finishedAt  DateTime
+  duration    Int
+
+  // Resources
+  lootedArmament Int
+  lootedMunition Int
+  lootedAlcohol  Int
+  lootedDollars  Int
+
+  // Relations
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model PointsHistory {
+  id               String @id @default(cuid())
+  date             DateTime @db.Date
+  pointsBuildings  Int
+  pointsTroops     Int
+  pointsResearch   Int
+  pointsTotal      Int
+  rankPosition     Int
+
+  // Relations
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([date])
+}
+
+model Troop {
+  id            String @id @default(cuid())
+  thug          Int    @default(0)
+  bouncer       Int    @default(0)
+  knifer        Int    @default(0)
+  gunman        Int    @default(0)
+  occupation    Int    @default(0)
+  spy           Int    @default(0)
+  carrier       Int    @default(0)
+  cia           Int    @default(0)
+  fbi           Int    @default(0)
+  transporter   Int    @default(0)
+  tactical      Int    @default(0)
+  sniper        Int    @default(0)
+  assassin      Int    @default(0)
+  ninja         Int    @default(0)
+  demolition    Int    @default(0)
+  mercenary     Int    @default(0)
+  illegal       Int    @default(0)
+  sentinel      Int    @default(0)
+  police        Int    @default(0)
+  bodyguard     Int    @default(0)
+  guard         Int    @default(0)
+
+  // Relations
+  buildingId String   @unique
+  building   Building @relation(fields: [buildingId], references: [id])
+}
+
+enum TroopType {
+  INFANTRY
+  DEFENSE
+}
+
+model NewTroop {
+  id         String    @id @default(cuid())
+  finishesAt DateTime
+  troopName  String
+  quantity   Int
+  duration   Int
+  type       TroopType
+
+  // Relations
+  buildingId String
+  building   Building @relation(fields: [buildingId], references: [id])
+  userId     String
+
+  @@index([buildingId])
+  @@index([userId])
+}
+
+// -------------------------------------------------
+// Family (Alliance) Models
+// -------------------------------------------------
+
+model Family {
+  id           String   @id @default(cuid())
+  tag          String   @unique @db.VarChar(8)
+  name         String   @unique @db.VarChar(35)
+  logoUrl      String?  @db.Text
+  description  String   @db.Text
+  website      String?  @db.Text
+
+  // Relations
+  members      FamilyMembership[]
+  ranks        FamilyRank[]
+  messages     FamilyMessage[]
+  applications FamilyApplication[]
+}
+
+model FamilyMembership {
+  id String @id @default(cuid())
+
+  // Relations
+  userId   String     @unique
+  user     User       @relation(fields: [userId], references: [id])
+  familyId String
+  family   Family     @relation(fields: [familyId], references: [id])
+  rankId   String
+  rank     FamilyRank @relation(fields: [rankId], references: [id])
+
+  @@index([familyId])
+}
+
+model FamilyRank {
+  id   String @id @default(cuid())
+  name String
+
+  // Permissions
+  isDefault         Boolean @default(false)
+  canReadMessages   Boolean @default(false)
+  canWriteMessages  Boolean @default(false)
+  canDeleteMessages Boolean @default(false)
+  canAcceptMembers  Boolean @default(false)
+  canSendCirculars  Boolean @default(false)
+  canReceiveCirculars Boolean @default(false)
+
+  // Relations
+  familyId String
+  family   Family @relation(fields: [familyId], references: [id])
+  members  FamilyMembership[]
+
+  @@index([familyId])
+}
+
+model FamilyMessage {
+  id        String   @id @default(cuid())
+  message   String   @db.Text
+  createdAt DateTime @default(now())
+
+  // Relations
+  userId   String
+  user     User   @relation(fields: [userId], references: [id])
+  familyId String
+  family   Family @relation(fields: [familyId], references: [id])
+
+  @@index([familyId])
+}
+
+model FamilyApplication {
+  id        String   @id @default(cuid())
+  text      String   @db.Text
+  createdAt DateTime @default(now())
+
+  // Relations
+  userId   String
+  user     User   @relation(fields: [userId], references: [id])
+  familyId String
+  family   Family @relation(fields: [familyId], references: [id])
+
+  @@index([familyId])
+}
