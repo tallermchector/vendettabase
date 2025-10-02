@@ -3,8 +3,14 @@
 class Mob_Server {
   
   public static function getDomain() {
-    $host = str_replace("www.", "", $_SERVER["HTTP_HOST"]);
-    return self::isSubDomain() ? end(explode(".", $host, 2)) : $host;
+    $host = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'localhost';
+    $host = str_replace('www.', '', $host);
+    // evitar warnings por end(explode()) y soportar localhost
+    if (strpos($host, '.') === false) {
+      return $host;
+    }
+    $parts = explode('.', $host, 2);
+    return self::isSubDomain() ? (isset($parts[1]) ? $parts[1] : $host) : $host;
   }
   
   public static function isSubDomain() {
@@ -16,7 +22,11 @@ class Mob_Server {
   }
   
   public static function getStaticUrl() {
-    return self::getSubDomain() == "test" ? "http://static.test.".self::getDomain()."/" : "http://static.".self::getDomain()."/";
+    // En desarrollo, servir estáticos desde /static/
+    if (defined('APPLICATION_ENV') && APPLICATION_ENV === 'development') {
+      return '/static/';
+    }
+    return self::getSubDomain() == 'test' ? 'http://static.test.'.self::getDomain().'/' : 'http://static.'.self::getDomain().'/';
   }
 
   public static function getServers() {
@@ -155,6 +165,11 @@ public static function getNameTrpEspia() {
   }
   
   public static function isCron() {
-    return (isset($_GET["cron"]) || (isset($_SERVER['argv'][1]) && $_SERVER['argv'][1] != "cron"));
+    // Es cron si viene ?cron=... o si se ejecuta CLI y el primer argumento es 'cron'
+    if (isset($_GET['cron'])) return true;
+    if (PHP_SAPI === 'cli') {
+      return isset($_SERVER['argv'][1]) && $_SERVER['argv'][1] === 'cron';
+    }
+    return false;
   }      
 }

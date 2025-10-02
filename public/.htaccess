@@ -1,0 +1,9 @@
+RewriteEngine On
+
+# Redirect to public index for all requests except existing files/directories
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [QSA,L]
+
+# Security: disable directory listing
+Options -Indexes

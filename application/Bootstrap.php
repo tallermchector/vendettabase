@@ -72,7 +72,12 @@ class Bootstrap extends Zend_Application_Bootstrap_Bootstrap
     
     protected function _initMetadataCache() {
         $frontendOptions = array('automatic_serialization' => true);
-        $backendOptions  = array('hashed_directory_level' => 2,'cache_dir' => PUBLIC_PATH.'/cacheFiles/metadata');
+        $cacheDir = PUBLIC_PATH . '/cacheFiles/metadata';
+        if (!is_dir($cacheDir)) {
+            // crear estructura necesaria para cache si no existe
+            @mkdir($cacheDir, 0777, true);
+        }
+        $backendOptions  = array('hashed_directory_level' => 2, 'cache_dir' => $cacheDir);
 
         $cache = Zend_Cache::factory('Core', 'File', $frontendOptions, $backendOptions);
 
